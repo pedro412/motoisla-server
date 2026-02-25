@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
 
+from apps.audit.models import AuditLog
 from apps.catalog.models import Product
 from apps.investors.models import Investor
 from apps.ledger.models import LedgerEntry, LedgerEntryType
@@ -106,6 +107,20 @@ class InvestorLedgerTests(APITestCase):
         )
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Decimal(response.data["qty_assigned"]), Decimal("5.00"))
+        assignment_id = response.data["id"]
+        self.assertTrue(AuditLog.objects.filter(action="investor.assignment.create", entity_id=assignment_id).exists())
+
+        updated = self.client.patch(
+            f"/api/v1/investors/assignments/{assignment_id}/",
+            {"qty_assigned": "6.00"},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertTrue(AuditLog.objects.filter(action="investor.assignment.update", entity_id=assignment_id).exists())
+
+        deleted = self.client.delete(f"/api/v1/investors/assignments/{assignment_id}/")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertTrue(AuditLog.objects.filter(action="investor.assignment.delete", entity_id=assignment_id).exists())
 
     def test_investor_can_only_view_own_profile(self):
         self.auth_as("investor_inv", "investor123")

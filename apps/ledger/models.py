@@ -26,3 +26,7 @@ class LedgerEntry(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["investor", "created_at"], name="ledger_investor_created_idx"),
+            models.Index(fields=["entry_type", "created_at"], name="ledger_type_created_idx"),
+        ]

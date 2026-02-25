@@ -16,7 +16,7 @@ from apps.sales.models import Sale, SaleLine, Payment, PaymentMethod, SaleStatus
 
 
 class LayawayViewSet(viewsets.ModelViewSet):
-    queryset = Layaway.objects.select_related("product", "created_by")
+    queryset = Layaway.objects.select_related("product", "created_by").prefetch_related("payments")
     serializer_class = LayawaySerializer
     permission_classes = [RolePermission]
     capability_map = {
@@ -191,7 +191,7 @@ class LayawayViewSet(viewsets.ModelViewSet):
 
 
 class CustomerCreditViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = CustomerCredit.objects.all()
+    queryset = CustomerCredit.objects.order_by("-updated_at")
     serializer_class = CustomerCreditSerializer
     permission_classes = [RolePermission]
     capability_map = {"list": ["layaway.manage"], "retrieve": ["layaway.manage"], "apply": ["layaway.manage"]}

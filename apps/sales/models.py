@@ -31,6 +31,12 @@ class Sale(models.Model):
     voided_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "confirmed_at"], name="sale_status_confirmed_idx"),
+            models.Index(fields=["cashier", "created_at"], name="sale_cashier_created_idx"),
+        ]
+
 
 class SaleLine(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -40,6 +46,11 @@ class SaleLine(models.Model):
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     unit_cost = models.DecimalField(max_digits=12, decimal_places=2)
     discount_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["product"], name="saleline_product_idx"),
+        ]
 
     def clean(self):
         if self.qty <= 0:
@@ -54,6 +65,13 @@ class Payment(models.Model):
     method = models.CharField(max_length=10, choices=PaymentMethod.choices)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     card_type = models.CharField(max_length=12, choices=CardType.choices, null=True, blank=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["method"], name="payment_method_idx"),
+            models.Index(fields=["card_type"], name="payment_card_type_idx"),
+            models.Index(fields=["sale", "method"], name="payment_sale_method_idx"),
+        ]
 
 
 class VoidEvent(models.Model):

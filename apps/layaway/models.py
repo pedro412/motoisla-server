@@ -23,6 +23,10 @@ class Layaway(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        indexes = [
+            models.Index(fields=["status", "expires_at"], name="layaway_status_expires_idx"),
+            models.Index(fields=["customer_phone"], name="layaway_customer_phone_idx"),
+        ]
         constraints = [
             models.CheckConstraint(check=models.Q(qty__gt=0), name="layaway_qty_gt_zero"),
             models.CheckConstraint(check=models.Q(total_price__gt=0), name="layaway_total_gt_zero"),
@@ -45,6 +49,10 @@ class CustomerCredit(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        indexes = [
+            models.Index(fields=["customer_phone"], name="customercredit_phone_idx"),
+            models.Index(fields=["customer_name", "customer_phone"], name="customercredit_name_phone_idx"),
+        ]
         constraints = [
             models.CheckConstraint(check=models.Q(balance__gte=0), name="customer_credit_balance_gte_zero"),
         ]

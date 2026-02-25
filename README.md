@@ -86,6 +86,7 @@ Con `Makefile`:
 - `make migrate`
 - `make test`
 - `make lint`
+- `make checkdeploy`
 
 ## Notas
 - La API usa permisos por rol (`ADMIN`, `CASHIER`, `INVESTOR`) con `accounts.User.role`.
@@ -98,3 +99,7 @@ Con `Makefile`:
 - Contexto para agentes: `docs/AGENT_CONTEXT.md`
 - Avance contra plan maestro: `docs/PLAN_STATUS.md`
 - Backlog ordenado: `docs/NEXT_STEPS.md`
+- Seguridad de release: `docs/SECURITY_CHECKLIST.md`
+- Runbook operativo: `docs/RUNBOOK.md`
+- Colección QA: `docs/API_QA_COLLECTION.http`
+- Definition of Done: `docs/DOD_V1.md`

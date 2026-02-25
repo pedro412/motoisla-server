@@ -3,7 +3,7 @@
 Referencia: `plan-maestro-v1.md` (v1)
 
 ## Resumen ejecutivo
-- Avance general estimado: **70-75% del backend v1**.
+- Avance general estimado: **86-90% del backend v1**.
 - Fases cerradas: **0, 1, 2, 3, 4, 5, 6**.
 - Fases pendientes: **7 y 8**.
 
@@ -58,21 +58,47 @@ Estado: ✅ Cerrada (núcleo)
 Estado: 🟡 Parcial
 Completado:
 - Audit log de acciones críticas.
-- Métrica de ventas básica (`/api/v1/metrics/`).
+- Métricas ampliadas en `/api/v1/metrics/`:
+  - rango de fechas (`date_from`, `date_to`)
+  - ticket promedio y total por rango
+  - top productos por unidades e importe neto
+  - desglose por método de pago y tipo de tarjeta
+- Endpoint de reporte admin readonly: `/api/v1/reports/sales/` con:
+  - agregación diaria (`sales_by_day`)
+  - agregación por cajero (`sales_by_cashier`)
+- Auditoría ampliada para eventos sensibles:
+  - `catalog.product.create|update|delete`
+  - `catalog.product_image.create|update|delete`
+  - `inventory.adjustment.create`
+  - `investor.assignment.create|update|delete`
+- Tests agregados para métricas/reportes y auditoría de catálogo/inventario.
 Pendiente:
-- Set de métricas gerenciales completas (top productos, métodos de pago detallados, cortes por periodo robustos).
-- Cobertura ampliada de auditoría cruzada para todos los eventos de dominio.
+- Endpoints/reportes gerenciales adicionales (gastos + cruces financieros).
+- Cobertura ampliada de auditoría cruzada para gastos y reportes financieros.
 
 ### Fase 8 — Hardening release
 Estado: 🟡 Parcial
 Completado:
 - Validaciones críticas y tests por módulo.
 - Serving de estáticos admin con Whitenoise.
+- Security hardening configurable por entorno en `settings`:
+  - guard de `SECRET_KEY` inseguro con `DEBUG=False`
+  - flags SSL/cookies/HSTS parametrizados
+  - CORS configurable por `DJANGO_CORS_*`
+- Optimización de queries/listados:
+  - `LayawayViewSet` con `prefetch_related("payments")`
+  - filtro temprano en `InventoryStockView` para evitar agregación global innecesaria
+- Índices nuevos para carga real:
+  - `sales`: status/confirmed_at, cashier/created_at, product en líneas, método/tipo en pagos
+  - `audit`: action+created_at, entity_type+entity_id
+  - `ledger`: investor+created_at, entry_type+created_at
+  - `layaway/customercredit`: status+expires_at, phone/name_phone
+- Colección API formal para QA: `docs/API_QA_COLLECTION.http`.
+- Runbook operativo base: `docs/RUNBOOK.md`.
+- Definition of Done v1 documentada: `docs/DOD_V1.md`.
 Pendiente:
-- Checklist formal de seguridad de release.
-- Optimización de queries en listados críticos.
-- Colección API formal para QA/operación.
-- Definition of Done v1 congelada por escrito.
+- Validación final en entorno de staging/producción con dominios reales de CSRF/CORS.
+- Medición de performance con datos de operación (baseline + p95 por endpoint crítico).
 
 ## Mapeo rápido contra plan maestro (módulos)
 - Catálogo: ✅

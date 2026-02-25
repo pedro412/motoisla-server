@@ -65,4 +65,9 @@ Registrado:
 ## 9. Riesgos actuales
 - Aún faltan reportes gerenciales completos (fase 7).
 - `expenses` existe como modelo base, sin módulo/reportería cerrada.
-- Falta hardening final de release (fase 8: performance tuning, checklist seguridad final y colección API formal).
+- Hardening fase 8 avanzado:
+  - checklist de seguridad base documentado
+  - colección API QA disponible
+  - runbook y DoD v1 documentados
+  - índices y optimizaciones de query en módulos críticos
+- Falta validación final en staging/prod con dominios reales y métricas de performance (baseline/p95).
