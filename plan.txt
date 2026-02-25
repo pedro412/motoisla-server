@@ -1,0 +1,972 @@
+SPEC TÉCNICO v1 — Moto Isla Core (Django API + Next.js clients)
+0) Stack y convenciones
+Backend
+
+Django 5.x
+
+PostgreSQL
+
+Django REST Framework (DRF)
+
+JWT: djangorestframework-simplejwt (access corto + refresh rotación)
+
+Django Admin: solo acceso técnico (session)
+
+Storage imágenes: local en dev, S3-compatible en prod (abstracto desde inicio)
+
+Frontend
+
+Next.js (App Router)
+
+POS + Admin + Investor Portal + Web Catalog (pueden vivir en un monorepo)
+
+Políticas v1 (configurables)
+
+VOID_WINDOW_MINUTES = 10
+
+CASHIER_MAX_DISCOUNT_PCT = 10.0
+
+Cajero: solo anula sus ventas dentro de ventana
+
+Cancelación fuera de ventana: solo admin
+
+Descuento > 10%: requiere override admin
+
+Audit log: toda acción crítica queda registrada
+
+1) Apps Django (módulos)
+
+accounts (usuarios, roles, permisos, auth helpers)
+
+catalog (productos, imágenes)
+
+suppliers (proveedores, parsers)
+
+imports (staging de factura pegada)
+
+purchases (recepciones confirmadas)
+
+inventory (movimientos inventario)
+
+sales (ventas, líneas, pagos, cancelaciones)
+
+layaway (apartados, saldo a favor)
+
+investors (inversionistas, asignaciones/lotes)
+
+ledger (movimientos financieros inversionista)
+
+expenses (gastos)
+
+audit (audit log)
+
+2) Modelo de Roles/Permisos
+Roles (Group)
+
+ADMIN
+
+CASHIER
+
+INVESTOR
+
+Permisos por capacidad (alto nivel)
+
+Admin: full
+
+Cashier:
+
+sales.create, sales.view_own (y opcional sales.view_day)
+
+sales.void_own_within_window
+
+sales.discount_up_to_limit
+
+layaway.create, layaway.settle, layaway.expire, customer_credit.apply
+
+Investor:
+
+investor.view_own, ledger.view_own
+
+Implementación: Group + DRF permissions por endpoint.
+
+3) Modelos (Django) — v1
+3.1 accounts
+User (extiende AbstractUser o usa default + profile)
+
+Campos extra:
+
+role (choices: ADMIN/CASHIER/INVESTOR) (redundante con Group, pero útil en UI)
+
+is_active
+
+Recomendado: usar Group como fuente de verdad; role opcional como cache.
+
+3.2 catalog
+Product
+
+id UUID
+
+sku (CharField, unique, indexed) ✅
+
+name (CharField, indexed)
+
+default_price (Decimal(12,2))
+
+is_active (bool)
+
+created_at, updated_at
+
+Constraints/Índices:
+
+Unique(sku)
+
+Index(name)
+
+Index(is_active)
+
+ProductImage
+
+id UUID
+
+product FK(Product, related_name=images)
+
+image (ImageField / FileField)
+
+is_primary (bool)
+
+created_at
+
+Constraint:
+
+opcional: solo 1 is_primary=True por producto (unique partial index)
+
+3.3 suppliers
+Supplier
+
+id UUID
+
+code (CharField, unique) e.g. MYESA, EDGE, FREEDCONN
+
+name
+
+is_active
+
+SupplierInvoiceParser
+
+id UUID
+
+supplier FK(Supplier)
+
+parser_key (unique por supplier)
+
+version (int)
+
+description
+
+is_active
+
+3.4 imports (staging “pegar factura”)
+InvoiceImportBatch
+
+id UUID
+
+supplier FK(Supplier)
+
+parser FK(SupplierInvoiceParser)
+
+raw_text TextField
+
+status (DRAFT, PARSED, CONFIRMED, CANCELLED, ERROR)
+
+invoice_number nullable
+
+invoice_date nullable (Date)
+
+subtotal, tax, total nullable Decimal
+
+created_by FK(User)
+
+created_at, confirmed_at
+
+InvoiceImportLine
+
+id UUID
+
+batch FK(InvoiceImportBatch, related_name=lines)
+
+line_no int
+
+raw_line TextField (o JSON)
+
+Parsed fields:
+
+parsed_sku, parsed_name, parsed_qty, parsed_unit_cost, parsed_unit_price
+
+Normalized/editable fields:
+
+sku, name, qty, unit_cost, unit_price
+
+Matching:
+
+matched_product FK(Product, null)
+
+match_status (NEW_PRODUCT, MATCHED_PRODUCT, AMBIGUOUS, INVALID)
+
+is_selected bool default True
+
+notes text null
+
+Constraints:
+
+(batch, line_no) unique
+
+Validaciones al confirmar:
+
+sku no vacío
+
+qty > 0
+
+unit_cost >= 0
+
+SKUs no duplicados dentro del batch (en selected lines)
+
+Si sku existe → matched_product obligatorio
+
+3.5 purchases
+PurchaseReceipt
+
+id UUID
+
+supplier FK(Supplier)
+
+invoice_number nullable
+
+invoice_date nullable
+
+status (DRAFT, POSTED, VOID)
+
+subtotal, tax, total nullable
+
+created_by FK(User)
+
+posted_at nullable
+
+source_import_batch FK(InvoiceImportBatch, null)
+
+PurchaseReceiptLine
+
+id UUID
+
+receipt FK(PurchaseReceipt, related_name=lines)
+
+product FK(Product)
+
+qty (Decimal or Int)
+
+unit_cost Decimal
+
+unit_price Decimal null (si quieres sugerir precio público)
+
+line_total Decimal (computed or stored)
+
+source_import_line FK(InvoiceImportLine, null)
+
+Constraints:
+
+receipt + product (opcional unique si no quieres duplicar líneas)
+
+qty > 0
+
+3.6 inventory
+InventoryMovement
+
+id UUID
+
+product FK(Product, indexed)
+
+qty_change Decimal (positivo/negativo)
+
+reason (PURCHASE, SALE, ADJUSTMENT, LAYAWAY_RESERVE, LAYAWAY_RELEASE, VOID_SALE, etc.)
+
+reference_type (Char) + reference_id (UUID) (o GenericForeignKey)
+
+created_by FK(User)
+
+created_at
+
+notes null
+
+Índices:
+
+(product, created_at)
+
+(reason, created_at)
+
+Stock disponible = suma movimientos por producto (v1). Si necesitas performance, agregas StockBalance después.
+
+3.7 sales (POS)
+Sale
+
+id UUID
+
+sale_no (secuencial legible, unique) opcional
+
+status (DRAFT, CONFIRMED, VOIDED)
+
+customer_id nullable (si luego crean Customer)
+
+Totales:
+
+subtotal, discount_total, total
+
+payment_status (UNPAID, PAID) (o implícito)
+
+created_by FK(User) (cajero)
+
+confirmed_at null
+
+Cancelación/anulación:
+
+voided_at null
+
+voided_by null
+
+void_reason null
+
+idempotency_key (CharField, unique, null) ✅ para confirmar venta sin duplicar
+
+created_at, updated_at
+
+SaleLine
+
+id UUID
+
+sale FK(Sale, related_name=lines)
+
+product FK(Product)
+
+qty
+
+unit_price
+
+discount_pct Decimal default 0
+
+discount_amount Decimal default 0
+
+line_total Decimal
+
+Flags inversionista:
+
+is_investor_item bool
+
+investor_lot_line FK(InvestorLotLine, null) (si aplica)
+
+Constraints:
+
+qty > 0
+
+Payment
+
+id UUID
+
+sale FK(Sale, related_name=payments)
+
+method (CASH, CARD)
+
+card_plan (NONE, MSI_3) default NONE
+
+amount Decimal
+
+processor_fee_rate Decimal (store 0, 0.02, 0.0558) ✅
+
+processor_fee_amount Decimal
+
+created_at
+
+Reglas:
+
+Se permite pago mixto (CASH + CARD). Fee aplica solo al monto CARD.
+
+Fee rate:
+
+CARD + NONE = 0.02
+
+CARD + MSI_3 = 0.0558
+
+3.8 layaway (apartados + saldo a favor)
+Customer (mínimo v1)
+
+id UUID
+
+name
+
+phone (indexed)
+
+notes null
+
+created_at
+
+Layaway
+
+id UUID
+
+status (ACTIVE, SETTLED, EXPIRED, CANCELLED)
+
+customer FK(Customer)
+
+product FK(Product) (v1: 1 producto por apartado; si luego necesitan múltiples, se extiende)
+
+price_at_hold Decimal
+
+deposit_amount Decimal
+
+expires_at DateTime
+
+created_by FK(User)
+
+settled_sale FK(Sale, null)
+
+created_at, updated_at
+
+LayawayPayment
+
+id UUID
+
+layaway FK(Layaway, related_name=payments)
+
+amount
+
+method (CASH, CARD)
+
+card_plan (NONE, MSI_3)
+
+fee_rate / fee_amount
+
+created_by
+
+created_at
+
+CustomerCredit
+
+id UUID
+
+customer FK(Customer)
+
+balance Decimal
+
+created_at, updated_at
+
+CustomerCreditMovement
+
+id UUID
+
+customer FK(Customer)
+
+type (CREDIT_IN, CREDIT_APPLY, ADJUST)
+
+amount
+
+reference_type/reference_id
+
+notes, created_by, created_at
+
+Reglas:
+
+Al expirar layaway: deposit → CustomerCreditMovement(CREDIT_IN)
+
+Aplicar saldo: CREDIT_APPLY (no cash-out)
+
+No reembolso en efectivo (v1)
+
+3.9 investors + ledger
+Investor
+
+id UUID
+
+display_name
+
+user FK(User, null) (si tiene acceso portal)
+
+created_at
+
+InvestorPosition (cache de saldos, derivable desde ledger)
+
+id UUID
+
+investor OneToOne
+
+cash_capital Decimal
+
+inventory_capital Decimal
+
+profit_balance Decimal
+
+updated_at
+
+LedgerMovement
+
+id UUID
+
+investor FK(Investor, indexed)
+
+type (CAPITAL_IN, CAPITAL_OUT, CAPITAL_TO_INVENTORY, INVENTORY_TO_CAPITAL, PROFIT_EARNED, PROFIT_TO_CAPITAL, FEE, ADJUST)
+
+amount Decimal (positivo/negativo según convención; recomiendo positivo + direction o signo)
+
+reference_type/reference_id
+
+meta JSON (e.g. sale_id, sku, fee_rate)
+
+created_by FK(User)
+
+created_at
+
+InvestorLot
+
+id UUID
+
+investor FK(Investor)
+
+receipt FK(PurchaseReceipt)
+
+status (OPEN, CLOSED)
+
+created_at
+
+InvestorLotLine
+
+id UUID
+
+lot FK(InvestorLot, related_name=lines)
+
+product FK(Product)
+
+qty Decimal
+
+unit_cost Decimal
+
+amount Decimal (qty*unit_cost)
+
+qty_sold Decimal default 0
+
+created_at
+
+Reglas:
+
+Capital líquido ↔ inventario:
+
+Al asignar compra a inversionista: ledger CAPITAL_TO_INVENTORY por amount; position cash--, inventory++
+
+Venta de item inversionista:
+
+INVENTORY_TO_CAPITAL por costo (capital recuperado)
+
+PROFIT_EARNED por utilidad neta (después fee)
+
+FEE si corresponde (o parte de meta; pero mejor movimiento separado)
+
+Reparto 50/50: registrar dos movimientos o registrar en meta + actualización de “balance MotoIsla” (si lo llevas). En v1: ledger solo del inversionista, y MotoIsla se infiere.
+
+3.10 expenses
+ExpenseCategory
+
+id UUID
+
+name unique
+
+Expense
+
+id UUID
+
+category FK
+
+type (FIXED, VARIABLE)
+
+amount Decimal
+
+period_start Date
+
+period_end Date null (o month)
+
+notes
+
+created_by
+
+created_at
+
+3.11 audit
+AuditEvent
+
+id UUID
+
+actor FK(User, null si system)
+
+role_snapshot (string)
+
+event_type (SALE_CREATE, SALE_CONFIRM, SALE_VOID, DISCOUNT_APPLY, LAYAWAY_CREATE, LAYAWAY_EXPIRE, CREDIT_APPLY, PURCHASE_IMPORT_CONFIRM, etc.)
+
+entity_type (Sale, Layaway, Product, etc.)
+
+entity_id UUID
+
+payload JSON (before/after, amounts, reason, ip, user_agent)
+
+created_at
+
+Regla:
+
+todo lo que haga cajero en ventas/apartados/descuentos/anulaciones genera AuditEvent.
+
+4) APIs (DRF) — Endpoints v1
+4.1 Auth (JWT)
+
+POST /api/auth/login → access+refresh
+
+POST /api/auth/refresh → new access (+ rotate refresh)
+
+POST /api/auth/logout → revoke refresh (blacklist)
+
+GET /api/auth/me → user + roles + permissions
+
+4.2 Products / búsqueda
+
+GET /api/products/search?q=
+
+busca por SKU exacto, SKU parcial, name parcial
+
+GET /api/products/{id}
+
+POST /api/products (admin)
+
+PATCH /api/products/{id} (admin)
+
+POST /api/products/{id}/images (admin)
+
+4.3 Imports (pegar factura)
+
+POST /api/imports/batches
+body: supplier_code, raw_text
+
+POST /api/imports/batches/{id}/parse
+ejecuta parser según supplier → crea lines
+
+GET /api/imports/batches/{id}
+
+PATCH /api/imports/lines/{id} (editar sku/name/qty/cost/price, match)
+
+POST /api/imports/batches/{id}/confirm
+→ crea/actualiza Products + PurchaseReceipt + InventoryMovements
+
+4.4 Purchases
+
+GET /api/purchases/receipts?date_from&date_to
+
+GET /api/purchases/receipts/{id}
+
+4.5 Sales (POS)
+
+POST /api/sales (cajero/admin) → crea draft
+
+POST /api/sales/{id}/lines add line
+
+PATCH /api/sales/{id}/lines/{line_id} update qty/discount (control)
+
+DELETE /api/sales/{id}/lines/{line_id}
+
+POST /api/sales/{id}/confirm
+body incluye:
+
+payments[] (CASH/CARD + plan + amount)
+
+idempotency_key (required)
+
+discount_reason (si hubo)
+
+POST /api/sales/{id}/void
+reglas: cajero solo si within 10 min + own sale; admin siempre (o fuera de ventana)
+
+GET /api/sales?scope=own|day|all&date_from&date_to
+
+4.6 Layaway / saldo a favor
+
+POST /api/customers (cajero/admin)
+
+GET /api/customers/search?q=phone_or_name
+
+POST /api/layaways
+body: customer_id, product_id, deposit_amount, expires_in_days=15
+
+POST /api/layaways/{id}/payments (pagar parcial o liquidar)
+
+POST /api/layaways/{id}/settle (convierte a sale + confirm)
+
+POST /api/layaways/{id}/expire (admin o cajero según política; en v1 admin o proceso batch)
+
+POST /api/customer-credits/{customer_id}/apply (aplicar saldo a sale)
+
+4.7 Investors portal
+
+GET /api/investors/me/summary
+
+GET /api/investors/me/movements?date_from&date_to
+
+GET /api/investors/me/lots
+
+(Admin)
+
+POST /api/investors (alta)
+
+POST /api/investors/{id}/capital/add
+
+POST /api/investors/{id}/capital/withdraw (solo cash_capital)
+
+POST /api/investors/{id}/profit/to-capital
+
+4.8 Expenses
+
+POST /api/expenses (admin)
+
+GET /api/expenses?month=YYYY-MM
+
+4.9 Audit viewer (admin)
+
+GET /api/audit?actor_id&event_type&date_from&date_to&entity_type
+
+5) Reglas de negocio en servicios (Backend) — v1
+5.1 Confirmar Import Batch
+
+Input: batch_id
+Steps:
+
+Validar líneas seleccionadas (SKU no vacío, qty>0, unit_cost>=0)
+
+Detectar SKUs duplicados dentro batch (selected) → error
+
+Para cada línea:
+
+si Product(sku) existe → usarlo
+
+si no existe → crear Product(sku,name, default_price=unit_price opcional)
+
+Crear PurchaseReceipt + lines
+
+Crear InventoryMovements reason=PURCHASE qty_change=+qty
+
+Batch.status=CONFIRMED
+
+5.2 Confirmar Sale (idempotente)
+
+Input: sale_id + payments[] + idempotency_key
+Steps:
+
+Si sale.status != DRAFT → error
+
+Verificar idempotency_key no usado (o si ya usado para este sale, return OK)
+
+Calcular totals (incluye descuentos)
+
+Validar payments sum == total
+
+Calcular fees solo sobre pagos CARD según plan
+
+Crear Payments
+
+Descontar inventario: InventoryMovement reason=SALE qty_change=-qty por línea
+
+Si línea inversionista:
+
+calcular utilidad neta (price - cost - fee_share) (fee prorrateada si pago mixto y hay varios items; definir prorrateo por proporción del line_total)
+
+registrar movimientos ledger inversionista:
+
+INVENTORY_TO_CAPITAL: costo
+
+FEE: fee_allocated (si aplica)
+
+PROFIT_EARNED: (utilidad_neta * 50%) para inversionista
+
+actualizar InvestorLotLine.qty_sold
+
+Marcar sale CONFIRMED + confirmed_at
+
+Emitir AuditEvent(SALE_CONFIRM)
+
+5.3 Descuento
+
+Cajero puede aplicar descuento ≤ 10% con motivo
+
+Si >10%: requiere override token/pin de admin (endpoint o header X-Admin-Override con credencial)
+
+5.4 Void/Anulación
+
+Cajero: solo si:
+
+within 10 min desde confirmed_at
+
+sale.created_by == current_user
+
+status CONFIRMED
+
+Admin: cualquier caso (pero siempre audit)
+
+Efectos:
+
+Crear InventoryMovement reason=VOID_SALE qty_change=+qty
+
+Revertir ledger inversionista con movimientos compensatorios (no borrar)
+
+status VOIDED + void_reason + voided_by + voided_at
+
+AuditEvent(SALE_VOID)
+
+5.5 Layaway expire
+
+Al expirar:
+
+liberar inventario (LAYAWAY_RELEASE)
+
+mover depósito a CustomerCreditMovement(CREDIT_IN)
+
+Layaway.status=EXPIRED
+
+AuditEvent(LAYAWAY_EXPIRE)
+
+6) Next.js — Páginas / Vistas v1
+6.1 POS (Cajero)
+
+Routes sugeridas:
+
+/pos (pantalla venta)
+
+search input (SKU/nombre parcial)
+
+lista de resultados
+
+ticket en construcción
+
+aplicar descuento (si permitido, pide motivo)
+
+confirmación pago (CASH/CARD + MSI_3)
+
+/pos/sales (ver ventas: propias / del día)
+
+/pos/layaways (crear/gestionar apartados)
+
+/pos/customer-credit (buscar cliente y aplicar saldo)
+
+/pos/void (anulación rápida: visible solo si dentro ventana)
+
+/pos/login
+
+6.2 Admin (Next.js)
+
+/admin/dashboard (métricas básicas)
+
+/admin/products (lista/editar/subir imagen)
+
+/admin/imports (pegar factura, revisar tabla, corregir, confirmar)
+
+/admin/purchases (recepciones)
+
+/admin/investors (alta, capital, movimientos, lots)
+
+/admin/expenses (gastos)
+
+/admin/audit (visor audit log)
+
+/admin/users (si no usas Django admin para esto; opcional)
+
+6.3 Investor portal
+
+/investor (summary)
+
+/investor/movements
+
+/investor/lots
+
+6.4 Web catalog (sin venta)
+
+/ marketing
+
+/catalog listado
+
+/catalog/[sku] detalle
+
+7) Flujos v1 (resumen ejecutable)
+Flujo A: Importar compra desde factura pegada
+
+Admin → /admin/imports → select supplier → paste
+
+POST batch → parse → render lines
+
+user edits sku/name/cost/qty + sube imágenes
+
+confirm batch → crea products + receipt + stock
+
+Flujo B: Venta POS
+
+Cajero busca producto (GET /products/search)
+
+arma ticket (draft sale + lines)
+
+aplica descuento (si permitido + motivo)
+
+confirma pago (confirm sale con idempotency_key)
+
+imprime ticket (frontend) + opcional “reprint log” después
+
+Flujo C: Anulación inmediata
+
+Cajero ve venta reciente (≤10 min) → void
+
+backend revierte inventario + ledger (compensatorio) + audit
+
+Flujo D: Apartado
+
+Cajero crea customer + layaway con depósito
+
+reserva inventario
+
+liquidación → settle → crea sale confirmada
+
+vencimiento → expire → saldo a favor + liberar stock
+
+Flujo E: Inversionista
+
+Admin registra capital inicial / add / withdraw (solo cash)
+
+Asigna compras (InvestorLot) y luego al vender se dispara ledger
+
+8) Entregables para Codex (tareas)
+
+Crear proyecto Django + apps + settings DRF + SimpleJWT + CORS
+
+Implementar modelos + migraciones (catalog, suppliers, imports, purchases, inventory, sales, layaway, investors, ledger, expenses, audit)
+
+Implementar servicios:
+
+ImportConfirmService
+
+SaleConfirmService (idempotente + fee + ledger)
+
+SaleVoidService
+
+LayawayServices (create/settle/expire/credit apply)
+
+Implementar APIs DRF:
+
+auth, products/search, imports, sales, layaway, investors, expenses, audit
+
+Implementar Next.js MVP:
+
+POS venta + búsqueda + confirm + void
+
+Admin imports (pegar factura) + confirm
+
+Admin audit viewer
+
+Pruebas:
+
+unit tests de reglas (SKU unique, confirm idempotency, fee calc, void window)
+
+integración API para flujos A/B/C/D
