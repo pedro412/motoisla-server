@@ -92,3 +92,9 @@ Con `Makefile`:
 - Errores API se devuelven en formato estándar:
   - `code`, `detail`, `fields`
 - Listados DRF usan paginación (`count`, `next`, `previous`, `results`).
+
+## Documentación extendida
+- Índice: `docs/README.md`
+- Contexto para agentes: `docs/AGENT_CONTEXT.md`
+- Avance contra plan maestro: `docs/PLAN_STATUS.md`
+- Backlog ordenado: `docs/NEXT_STEPS.md`
