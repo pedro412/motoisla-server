@@ -1,0 +1,45 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: motoisla-web
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-True}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:8000}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://motoisla:motoisla@db:5432/motoisla}
+      POSTGRES_DB: ${POSTGRES_DB:-motoisla}
+      POSTGRES_USER: ${POSTGRES_USER:-motoisla}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-motoisla}
+      POSTGRES_HOST: ${POSTGRES_HOST:-db}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: motoisla-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-motoisla}
+      POSTGRES_USER: ${POSTGRES_USER:-motoisla}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-motoisla}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-motoisla} -d ${POSTGRES_DB:-motoisla}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
