@@ -13,7 +13,7 @@ from apps.inventory.models import InventoryMovement
 from apps.investors.models import Investor
 from apps.ledger.models import LedgerEntry
 from apps.layaway.models import CustomerCredit, Layaway
-from apps.sales.models import Sale
+from apps.sales.models import CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus
 from apps.suppliers.models import Supplier, SupplierInvoiceParser
 
 User = get_user_model()
@@ -300,6 +300,29 @@ class ApiFlowTests(APITestCase):
         response = self.client.post(f"/api/v1/sales/{sale.id}/void/", {"reason": "Autorizado"}, format="json")
         self.assertEqual(response.status_code, 200)
 
+    def test_sale_update_endpoint_is_not_allowed(self):
+        self.auth_as("cashier", "cashier123")
+        sale_resp = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "50.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "100.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(sale_resp.status_code, 201)
+        sale_id = sale_resp.data["id"]
+        patch_response = self.client.patch(f"/api/v1/sales/{sale_id}/", {"total": "1.00"}, format="json")
+        self.assertEqual(patch_response.status_code, 405)
+
     def test_import_parse_and_confirm_creates_receipt_and_stock(self):
         self.auth_as("admin", "admin123")
         supplier = Supplier.objects.create(code="EDGE", name="Edge")
@@ -357,3 +380,152 @@ class ApiFlowTests(APITestCase):
         self.client.post(f"/api/v1/import-batches/{batch_id}/parse/", {}, format="json")
         confirmed = self.client.post(f"/api/v1/import-batches/{batch_id}/confirm/", {}, format="json")
         self.assertEqual(confirmed.status_code, 400)
+
+    def test_metrics_supports_date_range_top_products_and_payment_breakdown(self):
+        self.auth_as("admin", "admin123")
+        product_2 = Product.objects.create(sku="SKU-002", name="Guantes", default_price=Decimal("150.00"))
+
+        today = timezone.now()
+        in_range_day = today - timedelta(days=2)
+        out_of_range_day = today - timedelta(days=15)
+
+        sale_1 = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("200.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("200.00"),
+            confirmed_at=in_range_day,
+        )
+        SaleLine.objects.create(
+            sale=sale_1,
+            product=self.product,
+            qty=Decimal("2.00"),
+            unit_price=Decimal("100.00"),
+            unit_cost=Decimal("40.00"),
+            discount_pct=Decimal("0.00"),
+        )
+        Payment.objects.create(sale=sale_1, method=PaymentMethod.CASH, amount=Decimal("200.00"))
+
+        sale_2 = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("100.00"),
+            discount_amount=Decimal("5.00"),
+            total=Decimal("95.00"),
+            confirmed_at=in_range_day,
+        )
+        SaleLine.objects.create(
+            sale=sale_2,
+            product=self.product,
+            qty=Decimal("1.00"),
+            unit_price=Decimal("100.00"),
+            unit_cost=Decimal("40.00"),
+            discount_pct=Decimal("5.00"),
+        )
+        Payment.objects.create(
+            sale=sale_2,
+            method=PaymentMethod.CARD,
+            amount=Decimal("95.00"),
+            card_type=CardType.NORMAL,
+        )
+
+        sale_3 = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("150.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("150.00"),
+            confirmed_at=out_of_range_day,
+        )
+        SaleLine.objects.create(
+            sale=sale_3,
+            product=product_2,
+            qty=Decimal("1.00"),
+            unit_price=Decimal("150.00"),
+            unit_cost=Decimal("80.00"),
+            discount_pct=Decimal("0.00"),
+        )
+        Payment.objects.create(
+            sale=sale_3,
+            method=PaymentMethod.CARD,
+            amount=Decimal("150.00"),
+            card_type=CardType.MSI_3,
+        )
+
+        Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.DRAFT,
+            subtotal=Decimal("500.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("500.00"),
+        )
+
+        response = self.client.get(
+            "/api/v1/metrics/",
+            {
+                "date_from": (today - timedelta(days=7)).date().isoformat(),
+                "date_to": today.date().isoformat(),
+                "top_limit": 5,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["sales_count"], 2)
+        self.assertEqual(Decimal(str(response.data["total_sales"])), Decimal("295.00"))
+        self.assertEqual(Decimal(str(response.data["avg_ticket"])), Decimal("147.5"))
+
+        top_products = response.data["top_products"]
+        self.assertEqual(len(top_products), 1)
+        self.assertEqual(top_products[0]["product__sku"], "SKU-001")
+        self.assertEqual(Decimal(str(top_products[0]["units_sold"])), Decimal("3.00"))
+        self.assertEqual(Decimal(str(top_products[0]["sales_amount"])), Decimal("295.00"))
+
+        by_method = {row["method"]: row for row in response.data["payment_breakdown"]["by_method"]}
+        self.assertEqual(Decimal(str(by_method["CASH"]["total_amount"])), Decimal("200.00"))
+        self.assertEqual(by_method["CASH"]["transactions"], 1)
+        self.assertEqual(Decimal(str(by_method["CARD"]["total_amount"])), Decimal("95.00"))
+        self.assertEqual(by_method["CARD"]["transactions"], 1)
+
+        card_types = {row["card_type"]: row for row in response.data["payment_breakdown"]["card_types"]}
+        self.assertIn("NORMAL", card_types)
+        self.assertEqual(Decimal(str(card_types["NORMAL"]["total_amount"])), Decimal("95.00"))
+
+    def test_sales_report_includes_daily_and_cashier_breakdown(self):
+        self.auth_as("admin", "admin123")
+        second_cashier = User.objects.create_user(username="cashier2", password="cashier123", role="CASHIER")
+        now = timezone.now()
+
+        Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("200.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("200.00"),
+            confirmed_at=now - timedelta(days=1),
+        )
+        Sale.objects.create(
+            cashier=second_cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("150.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("150.00"),
+            confirmed_at=now,
+        )
+
+        response = self.client.get(
+            "/api/v1/reports/sales/",
+            {
+                "date_from": (now - timedelta(days=7)).date().isoformat(),
+                "date_to": now.date().isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("sales_by_day", response.data)
+        self.assertIn("sales_by_cashier", response.data)
+        self.assertEqual(len(response.data["sales_by_day"]), 2)
+
+        cashiers = {row["cashier__username"]: row for row in response.data["sales_by_cashier"]}
+        self.assertEqual(Decimal(str(cashiers["cashier"]["total_sales"])), Decimal("200.00"))
+        self.assertEqual(cashiers["cashier"]["sales_count"], 1)
+        self.assertEqual(Decimal(str(cashiers["cashier2"]["total_sales"])), Decimal("150.00"))
+        self.assertEqual(cashiers["cashier2"]["sales_count"], 1)

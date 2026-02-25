@@ -25,6 +25,7 @@ class SaleViewSet(viewsets.ModelViewSet):
     queryset = Sale.objects.select_related("cashier").prefetch_related("lines", "payments")
     serializer_class = SaleSerializer
     permission_classes = [RolePermission]
+    http_method_names = ["get", "post", "head", "options"]
     capability_map = {
         "list": ["sales.view"],
         "retrieve": ["sales.view"],

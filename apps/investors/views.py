@@ -32,6 +32,7 @@ class InvestorViewSet(viewsets.ModelViewSet):
         "create": ["investor.manage"],
         "partial_update": ["investor.manage"],
         "update": ["investor.manage"],
+        "destroy": ["investor.manage"],
         "deposit": ["ledger.manage"],
         "withdraw": ["ledger.manage"],
         "reinvest": ["ledger.manage"],
@@ -131,10 +132,63 @@ class InvestorAssignmentViewSet(viewsets.ModelViewSet):
         "create": ["investor.manage"],
         "partial_update": ["investor.manage"],
         "update": ["investor.manage"],
+        "destroy": ["investor.manage"],
     }
 
     def get_queryset(self):
         return super().get_queryset().annotate(qty_available=F("qty_assigned") - F("qty_sold"))
+
+    def perform_create(self, serializer):
+        assignment = serializer.save()
+        record_audit(
+            actor=self.request.user,
+            action="investor.assignment.create",
+            entity_type="investor_assignment",
+            entity_id=assignment.id,
+            payload={
+                "investor_id": str(assignment.investor_id),
+                "product_id": str(assignment.product_id),
+                "qty_assigned": str(assignment.qty_assigned),
+                "unit_cost": str(assignment.unit_cost),
+            },
+        )
+
+    def perform_update(self, serializer):
+        assignment = self.get_object()
+        before = {
+            "qty_assigned": str(assignment.qty_assigned),
+            "qty_sold": str(assignment.qty_sold),
+            "unit_cost": str(assignment.unit_cost),
+        }
+        assignment = serializer.save()
+        after = {
+            "qty_assigned": str(assignment.qty_assigned),
+            "qty_sold": str(assignment.qty_sold),
+            "unit_cost": str(assignment.unit_cost),
+        }
+        record_audit(
+            actor=self.request.user,
+            action="investor.assignment.update",
+            entity_type="investor_assignment",
+            entity_id=assignment.id,
+            payload={"before": before, "after": after},
+        )
+
+    def perform_destroy(self, instance):
+        record_audit(
+            actor=self.request.user,
+            action="investor.assignment.delete",
+            entity_type="investor_assignment",
+            entity_id=instance.id,
+            payload={
+                "investor_id": str(instance.investor_id),
+                "product_id": str(instance.product_id),
+                "qty_assigned": str(instance.qty_assigned),
+                "qty_sold": str(instance.qty_sold),
+                "unit_cost": str(instance.unit_cost),
+            },
+        )
+        super().perform_destroy(instance)
 
 
 class MyInvestorProfileView(GenericAPIView):
