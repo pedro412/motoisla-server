@@ -114,6 +114,7 @@ class SaleViewSet(viewsets.ModelViewSet):
                     note="Sale void",
                     created_by=request.user,
                 )
+                self._revert_investor_ledger_for_line(sale, line)
 
             sale.status = SaleStatus.VOID
             sale.voided_at = timezone.now()
@@ -140,14 +141,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         line_discount = gross_line_revenue * line.discount_pct / Decimal("100")
         net_revenue = gross_line_revenue - line_discount
 
-        commission_total = Decimal("0")
-        for payment in sale.payments.all():
-            if payment.method != PaymentMethod.CARD:
-                continue
-            if payment.card_type == CardType.MSI_3:
-                commission_total += payment.amount * CARD_MSI3_COMMISSION
-            else:
-                commission_total += payment.amount * CARD_NORMAL_COMMISSION
+        commission_total = self._sale_commission_total(sale)
 
         for assignment in assignments:
             available = assignment.qty_assigned - assignment.qty_sold
@@ -186,6 +180,69 @@ class SaleViewSet(viewsets.ModelViewSet):
                 reference_id=str(sale.id),
                 note="Profit share 50/50",
             )
+
+    def _revert_investor_ledger_for_line(self, sale, line):
+        remaining_qty = line.qty
+        assignments = InvestorAssignment.objects.filter(
+            product=line.product,
+            qty_sold__gt=0,
+        ).order_by("-created_at")
+
+        gross_line_revenue = line.qty * line.unit_price
+        line_discount = gross_line_revenue * line.discount_pct / Decimal("100")
+        net_revenue = gross_line_revenue - line_discount
+        commission_total = self._sale_commission_total(sale)
+
+        for assignment in assignments:
+            if remaining_qty <= 0:
+                break
+
+            reversible_qty = min(assignment.qty_sold, remaining_qty)
+            if reversible_qty <= 0:
+                continue
+
+            proportional_revenue = net_revenue * (reversible_qty / line.qty)
+            proportional_cost = assignment.unit_cost * reversible_qty
+            proportional_commission = commission_total * (reversible_qty / line.qty)
+            net_profit = proportional_revenue - proportional_cost - proportional_commission
+            investor_profit_share = net_profit / Decimal("2")
+
+            assignment.qty_sold -= reversible_qty
+            assignment.save(update_fields=["qty_sold"])
+            remaining_qty -= reversible_qty
+
+            LedgerEntry.objects.create(
+                investor=assignment.investor,
+                entry_type=LedgerEntryType.INVENTORY_TO_CAPITAL,
+                capital_delta=-proportional_cost,
+                inventory_delta=proportional_cost,
+                profit_delta=Decimal("0"),
+                reference_type="sale_void",
+                reference_id=str(sale.id),
+                note="Capital recovery reversal (void)",
+            )
+            LedgerEntry.objects.create(
+                investor=assignment.investor,
+                entry_type=LedgerEntryType.PROFIT_SHARE,
+                capital_delta=Decimal("0"),
+                inventory_delta=Decimal("0"),
+                profit_delta=-investor_profit_share,
+                reference_type="sale_void",
+                reference_id=str(sale.id),
+                note="Profit share reversal (void)",
+            )
+
+    @staticmethod
+    def _sale_commission_total(sale):
+        commission_total = Decimal("0")
+        for payment in sale.payments.all():
+            if payment.method != PaymentMethod.CARD:
+                continue
+            if payment.card_type == CardType.MSI_3:
+                commission_total += payment.amount * CARD_MSI3_COMMISSION
+            else:
+                commission_total += payment.amount * CARD_NORMAL_COMMISSION
+        return commission_total
     @staticmethod
     def _resolve_role(user):
         group_names = set(user.groups.values_list("name", flat=True))

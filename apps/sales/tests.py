@@ -11,8 +11,9 @@ from apps.audit.models import AuditLog
 from apps.catalog.models import Product
 from apps.expenses.models import Expense
 from apps.inventory.models import InventoryMovement
-from apps.investors.models import Investor
+from apps.investors.models import Investor, InvestorAssignment
 from apps.ledger.models import LedgerEntry
+from apps.ledger.services import current_balances
 from apps.layaway.models import CustomerCredit, Layaway
 from apps.sales.models import CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus
 from apps.suppliers.models import Supplier, SupplierInvoiceParser
@@ -579,3 +580,82 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(Decimal(str(by_category["Rent"]["total_amount"])), Decimal("120.00"))
         self.assertEqual(Decimal(str(by_category["Utilities"]["total_amount"])), Decimal("30.00"))
         self.assertEqual(Decimal(str(response.data["net_sales_after_expenses"])), Decimal("150.00"))
+
+    def test_investor_sale_confirm_and_void_revert_stock_assignment_and_ledger(self):
+        self.auth_as("cashier", "cashier123")
+        assignment = InvestorAssignment.objects.create(
+            investor=self.investor,
+            product=self.product,
+            qty_assigned=Decimal("5.00"),
+            unit_cost=Decimal("40.00"),
+        )
+
+        sale_resp = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "2.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "40.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "200.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(sale_resp.status_code, 201)
+        sale_id = sale_resp.data["id"]
+
+        confirm = self.client.post(f"/api/v1/sales/{sale_id}/confirm/", {}, format="json")
+        self.assertEqual(confirm.status_code, 200)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("2.00"))
+        self.assertEqual(self.stock(), Decimal("8.00"))
+
+        balances_after_confirm = current_balances(self.investor)
+        self.assertEqual(Decimal(str(balances_after_confirm["capital"])), Decimal("80.00"))
+        self.assertEqual(Decimal(str(balances_after_confirm["inventory"])), Decimal("-80.00"))
+        self.assertEqual(Decimal(str(balances_after_confirm["profit"])), Decimal("60.00"))
+
+        void = self.client.post(f"/api/v1/sales/{sale_id}/void/", {"reason": "test-reverse"}, format="json")
+        self.assertEqual(void.status_code, 200)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("0.00"))
+        self.assertEqual(self.stock(), Decimal("10.00"))
+
+        balances_after_void = current_balances(self.investor)
+        self.assertEqual(Decimal(str(balances_after_void["capital"])), Decimal("0.00"))
+        self.assertEqual(Decimal(str(balances_after_void["inventory"])), Decimal("0.00"))
+        self.assertEqual(Decimal(str(balances_after_void["profit"])), Decimal("0.00"))
+        self.assertTrue(LedgerEntry.objects.filter(reference_type="sale_void", reference_id=str(sale_id)).exists())
+
+    def test_voided_sale_is_excluded_from_metrics(self):
+        self.auth_as("cashier", "cashier123")
+        sale_resp = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "40.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "100.00"}],
+            },
+            format="json",
+        )
+        sale_id = sale_resp.data["id"]
+        self.client.post(f"/api/v1/sales/{sale_id}/confirm/", {}, format="json")
+        self.client.post(f"/api/v1/sales/{sale_id}/void/", {"reason": "metrics-check"}, format="json")
+
+        self.auth_as("admin", "admin123")
+        metrics = self.client.get("/api/v1/metrics/")
+        self.assertEqual(metrics.status_code, 200)
+        self.assertEqual(metrics.data["sales_count"], 0)
+        self.assertEqual(Decimal(str(metrics.data["total_sales"])), Decimal("0.00"))
