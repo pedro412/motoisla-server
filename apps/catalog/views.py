@@ -1,10 +1,15 @@
+from django.conf import settings
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import cache_page
 from django.db.models import DecimalField, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
-from rest_framework import viewsets
+from rest_framework import generics, viewsets
+from rest_framework.permissions import AllowAny
 
 from apps.audit.services import record_audit
 from apps.catalog.models import Product, ProductImage
-from apps.catalog.serializers import ProductImageSerializer, ProductSerializer
+from apps.catalog.serializers import ProductImageSerializer, ProductSerializer, PublicCatalogProductSerializer
+from apps.catalog.throttles import PublicCatalogAnonThrottle
 from apps.common.permissions import RolePermission
 from apps.inventory.models import InventoryMovement
 
@@ -143,3 +148,31 @@ class ProductImageViewSet(viewsets.ModelViewSet):
             payload={"product_id": str(instance.product_id), "is_primary": instance.is_primary},
         )
         super().perform_destroy(instance)
+
+
+@method_decorator(cache_page(settings.PUBLIC_CATALOG_CACHE_TTL_SECONDS), name="dispatch")
+class PublicCatalogListView(generics.ListAPIView):
+    serializer_class = PublicCatalogProductSerializer
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [PublicCatalogAnonThrottle]
+
+    def get_queryset(self):
+        queryset = Product.objects.filter(is_active=True).prefetch_related("images").order_by("name")
+        query = self.request.query_params.get("q")
+        if query:
+            query = query.strip()
+            queryset = queryset.filter(Q(name__icontains=query) | Q(sku__icontains=query))
+        return queryset
+
+
+@method_decorator(cache_page(settings.PUBLIC_CATALOG_CACHE_TTL_SECONDS), name="dispatch")
+class PublicCatalogDetailView(generics.RetrieveAPIView):
+    serializer_class = PublicCatalogProductSerializer
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [PublicCatalogAnonThrottle]
+    lookup_field = "sku"
+
+    def get_queryset(self):
+        return Product.objects.filter(is_active=True).prefetch_related("images")

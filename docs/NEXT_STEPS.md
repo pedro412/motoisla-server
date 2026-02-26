@@ -30,9 +30,12 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 2. ✅ Integración en reportería gerencial base.
 3. ✅ Tests de agregación por categoría y periodo.
 
-## Prioridad 4 — Soporte frontend catalog-only (siguiente foco)
-1. Endpoint de catálogo público readonly (si se decide separarlo de auth).
-2. Rate limiting/caching básico para consulta pública.
+## Prioridad 4 — Soporte frontend catalog-only
+1. ✅ Endpoint de catálogo público readonly (`/api/v1/public/catalog/`, `/api/v1/public/catalog/{sku}/`).
+2. ✅ Rate limiting/caching básico para consulta pública.
+3. Siguiente iteración:
+- acordar contrato final con frontend web (campos/orden/filtros adicionales)
+- evaluar cache externa (Redis/CDN) para tráfico alto
 
 ## Prioridad 5 — Seguimiento operativo
 1. Validar CSRF/CORS con dominios reales en staging/prod.

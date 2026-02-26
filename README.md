@@ -50,6 +50,8 @@ Backend base de Moto Isla con **Django + DRF + JWT**, listo para correr en local
   - `GET/POST /api/v1/products/`
   - `GET/PATCH/DELETE /api/v1/products/{id}/`
   - `GET/POST /api/v1/product-images/`
+  - `GET /api/v1/public/catalog/` (público readonly, con cache/throttle)
+  - `GET /api/v1/public/catalog/{sku}/` (público readonly)
 - Inventario:
   - `GET/POST /api/v1/inventory/movements/`
   - `GET /api/v1/inventory/stocks/`

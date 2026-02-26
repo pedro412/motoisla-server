@@ -109,6 +109,13 @@ TIME_ZONE = "America/Mexico_City"
 USE_I18N = True
 USE_TZ = True
 
+CACHES = {
+    "default": env.cache("CACHE_URL", default="locmemcache://motoisla-cache"),
+}
+
+PUBLIC_CATALOG_CACHE_TTL_SECONDS = env.int("PUBLIC_CATALOG_CACHE_TTL_SECONDS", default=60)
+PUBLIC_CATALOG_THROTTLE_RATE = env("PUBLIC_CATALOG_THROTTLE_RATE", default="120/min")
+
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
@@ -135,6 +142,9 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
     "EXCEPTION_HANDLER": "apps.common.exceptions.api_exception_handler",
+    "DEFAULT_THROTTLE_RATES": {
+        "public_catalog": PUBLIC_CATALOG_THROTTLE_RATE,
+    },
 }
 
 SIMPLE_JWT = {

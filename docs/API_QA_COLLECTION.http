@@ -49,6 +49,12 @@ Content-Type: application/json
 GET {{baseUrl}}/api/v1/products/?q=QA-SKU
 Authorization: Bearer {{accessToken}}
 
+### Public Catalog List (no auth)
+GET {{baseUrl}}/api/v1/public/catalog/?q=QA
+
+### Public Catalog Detail by SKU (no auth)
+GET {{baseUrl}}/api/v1/public/catalog/QA-SKU-001/
+
 ### Manual Inventory Adjustment
 POST {{baseUrl}}/api/v1/inventory/movements/
 Authorization: Bearer {{accessToken}}
