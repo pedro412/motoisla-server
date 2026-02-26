@@ -1,57 +1,87 @@
 # Moto Isla Server
 
-Backend base de Moto Isla con **Django + DRF + JWT**, listo para correr en local con **Docker + PostgreSQL**.
+Backend de Moto Isla para operación de tienda: catálogo, inventario, compras, ventas POS, apartados, inversionistas/ledger, gastos y reportes.
+
+Base técnica: **Django + DRF + JWT + PostgreSQL**, listo para correr local con Docker.
+
+## Estado actual del backend
+- Core backend v1 prácticamente cerrado para operación local.
+- Módulos funcionales: catálogo, inventario, compras/imports, ventas, cancelación, apartados, inversionistas/ledger, gastos, auditoría, métricas y reportes.
+- Endpoint público para frontend catálogo-only disponible (`/api/v1/public/catalog/`).
+- Hardening base aplicado (settings de seguridad, checklist, runbook, colección QA, DoD).
+
+## Lo más importante (reglas críticas)
+- SKU único en catálogo.
+- Venta confirmada es la que impacta stock/métricas/ledger.
+- Reintentos de confirmación no deben duplicar impacto.
+- Cancelación (`void`) revierte inventario y, para productos de inversionista, revierte también asignación/ledger.
+- Descuento cajero >10% requiere override admin.
+- Apartados vencidos pasan a saldo a favor, no reembolso en efectivo.
 
 ## Stack
 - Django 5.x
 - Django REST Framework
 - Simple JWT
 - PostgreSQL 16
-- Gunicorn
+- Gunicorn + Whitenoise
 - Docker / Docker Compose
 
 ## Estructura principal
 - `config/`: configuración Django.
 - `apps/api_urls.py`: enrutado API `v1`.
 - `apps/accounts`: usuario custom + roles.
-- `apps/catalog`: productos e imágenes.
-- `apps/inventory`: movimientos y stock.
-- `apps/purchases`: recepciones y confirmación idempotente.
-- `apps/sales`: ventas, confirmación, void y métricas.
+- `apps/catalog`: productos, imágenes y catálogo público readonly.
+- `apps/inventory`: movimientos y stock agregado.
+- `apps/imports`: parse/edición/confirmación de factura pegada.
+- `apps/purchases`: recepciones de compra.
+- `apps/sales`: ventas, confirmación, anulación, métricas y reportes.
 - `apps/layaway`: apartados y saldo a favor.
-- `apps/investors` + `apps/ledger`: perfil/ledger de inversionista.
-- `apps/audit`: auditoría de acciones críticas.
+- `apps/investors` + `apps/ledger`: inversionistas, asignaciones y movimientos financieros.
+- `apps/expenses`: gastos administrativos.
+- `apps/audit`: auditoría de eventos críticos.
 
-## Levantar entorno local
+## Quickstart local
 1. Copia variables base:
-   ```bash
-   cp .env.example .env
-   ```
-2. Build + up:
-   ```bash
-   docker compose up --build
-   ```
-3. Ejecuta migraciones (primera vez):
-   ```bash
-   docker compose run --rm web python manage.py makemigrations
-   docker compose run --rm web python manage.py migrate
-   ```
+```bash
+cp .env.example .env
+```
+2. Levanta entorno:
+```bash
+docker compose up --build
+```
+3. Migraciones iniciales:
+```bash
+docker compose run --rm web python manage.py makemigrations
+docker compose run --rm web python manage.py migrate
+```
 4. Seed de roles:
-   ```bash
-   docker compose run --rm web python manage.py seed_roles
-   ```
+```bash
+docker compose run --rm web python manage.py seed_roles
+```
 
-## Endpoints base
-- Health: `GET /health/`
-- JWT:
+## Comandos útiles
+- `make up`
+- `make down`
+- `make logs`
+- `make makemigrations`
+- `make migrate`
+- `make test`
+- `make lint`
+- `make checkdeploy`
+
+## Endpoints clave
+- Health:
+  - `GET /health/`
+- Auth:
   - `POST /api/v1/auth/token/`
   - `POST /api/v1/auth/token/refresh/`
-- Catálogo:
+- Catálogo interno:
   - `GET/POST /api/v1/products/`
   - `GET/PATCH/DELETE /api/v1/products/{id}/`
   - `GET/POST /api/v1/product-images/`
-  - `GET /api/v1/public/catalog/` (público readonly, con cache/throttle)
-  - `GET /api/v1/public/catalog/{sku}/` (público readonly)
+- Catálogo público readonly:
+  - `GET /api/v1/public/catalog/`
+  - `GET /api/v1/public/catalog/{sku}/`
 - Inventario:
   - `GET/POST /api/v1/inventory/movements/`
   - `GET /api/v1/inventory/stocks/`
@@ -83,27 +113,31 @@ Backend base de Moto Isla con **Django + DRF + JWT**, listo para correr en local
   - `GET /api/v1/investors/me/`
   - `GET /api/v1/investors/me/ledger/`
 
-## Comandos útiles
-Con `Makefile`:
-- `make up`
-- `make down`
-- `make logs`
-- `make makemigrations`
-- `make migrate`
-- `make test`
-- `make lint`
-- `make checkdeploy`
+## Calidad y validación esperada antes de cambios grandes
+- Ejecutar `make lint`.
+- Ejecutar `make test`.
+- Para checks de despliegue: `make checkdeploy`.
+- Mantener contratos API existentes (`code`, `detail`, `fields` y paginación DRF).
 
-## Notas
-- La API usa permisos por rol (`ADMIN`, `CASHIER`, `INVESTOR`) con `accounts.User.role`.
-- Errores API se devuelven en formato estándar:
-  - `code`, `detail`, `fields`
-- Listados DRF usan paginación (`count`, `next`, `previous`, `results`).
+## Pendientes y backlog actual (alto nivel)
+- Seguimiento operativo post-hardening:
+  - validar CORS/CSRF con dominios reales en staging/prod.
+  - baseline de performance p95 con tráfico real.
+- Reportería financiera avanzada (iterativa):
+  - cortes/márgenes ejecutivos adicionales.
+- Frontend:
+  - consumir catálogo público y flujos POS/admin con contratos actuales.
+
+## Convenciones
+- Roles: `ADMIN`, `CASHIER`, `INVESTOR`.
+- Error contract: `code`, `detail`, `fields`.
+- Listados: `count`, `next`, `previous`, `results`.
+- Rutas base de API: `/api/v1/`.
 
 ## Documentación extendida
-- Índice: `docs/README.md`
+- Índice general: `docs/README.md`
 - Contexto para agentes: `docs/AGENT_CONTEXT.md`
-- Avance contra plan maestro: `docs/PLAN_STATUS.md`
+- Estado contra plan maestro: `docs/PLAN_STATUS.md`
 - Backlog ordenado: `docs/NEXT_STEPS.md`
 - Seguridad de release: `docs/SECURITY_CHECKLIST.md`
 - Runbook operativo: `docs/RUNBOOK.md`
