@@ -51,6 +51,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Purchases: `/api/v1/purchase-receipts/`
 - Sales: `/api/v1/sales/`, `/api/v1/metrics/`
 - Reports: `/api/v1/reports/sales/`
+- Public catalog: `/api/v1/public/catalog/`, `/api/v1/public/catalog/{sku}/`
 - Layaway: `/api/v1/layaways/`, `/api/v1/customer-credits/`
 - Investors: `/api/v1/investors/`, `/api/v1/investors/me/`
 - Expenses: `/api/v1/expenses/`

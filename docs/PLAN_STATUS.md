@@ -3,7 +3,7 @@
 Referencia: `plan-maestro-v1.md` (v1)
 
 ## Resumen ejecutivo
-- Avance general estimado: **92-95% del backend v1**.
+- Avance general estimado: **94-96% del backend v1**.
 - Fases cerradas: **0, 1, 2, 3, 4, 5, 6, 7, 8**.
 - Fases pendientes: **ninguna de backend core**.
 
@@ -118,4 +118,4 @@ Seguimiento operativo (no bloqueante del cierre backend):
 - Gastos: ✅ CRUD + reportería base
 - Métricas/reportes: 🟡 Parcial
 - Usuarios/Roles/Accesos: ✅
-- Catálogo web (solo visualización): ⏳ Depende de frontend
+- Catálogo web (solo visualización): ✅ Backend listo (endpoint público readonly)
