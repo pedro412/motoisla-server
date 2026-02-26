@@ -4,8 +4,8 @@ Referencia: `plan-maestro-v1.md` (v1)
 
 ## Resumen ejecutivo
 - Avance general estimado: **86-90% del backend v1**.
-- Fases cerradas: **0, 1, 2, 3, 4, 5, 6**.
-- Fases pendientes: **7 y 8**.
+- Fases cerradas: **0, 1, 2, 3, 4, 5, 6, 8**.
+- Fases pendientes: **7**.
 
 ## Estado por fase
 
@@ -77,7 +77,7 @@ Pendiente:
 - Cobertura ampliada de auditoría cruzada para gastos y reportes financieros.
 
 ### Fase 8 — Hardening release
-Estado: 🟡 Parcial
+Estado: ✅ Cerrada (scope backend)
 Completado:
 - Validaciones críticas y tests por módulo.
 - Serving de estáticos admin con Whitenoise.
@@ -96,9 +96,9 @@ Completado:
 - Colección API formal para QA: `docs/API_QA_COLLECTION.http`.
 - Runbook operativo base: `docs/RUNBOOK.md`.
 - Definition of Done v1 documentada: `docs/DOD_V1.md`.
-Pendiente:
-- Validación final en entorno de staging/producción con dominios reales de CSRF/CORS.
-- Medición de performance con datos de operación (baseline + p95 por endpoint crítico).
+Seguimiento operativo (no bloqueante del cierre backend):
+- Revalidar CSRF/CORS con dominios reales al configurar staging/prod final.
+- Capturar baseline p95 con tráfico real una vez esté activo el entorno objetivo.
 
 ## Mapeo rápido contra plan maestro (módulos)
 - Catálogo: ✅

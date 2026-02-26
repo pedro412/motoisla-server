@@ -16,4 +16,4 @@ Este directorio centraliza el contexto operativo para humanos y agentes de IA.
 - `plan.txt`
 
 ## Última actualización
-- 2026-02-25
+- 2026-02-26
