@@ -10,7 +10,7 @@ logs:
 	docker compose logs -f
 
 test:
-	docker compose run --rm web python manage.py test
+	docker compose run --rm -e SKIP_COLLECTSTATIC=1 web python manage.py test
 
 lint:
 	docker compose run --rm web python -m compileall manage.py config apps
@@ -40,4 +40,5 @@ checkdeploy:
 		-e DJANGO_SECURE_HSTS_SECONDS=31536000 \
 		-e DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=True \
 		-e DJANGO_SECURE_HSTS_PRELOAD=True \
+		-e SKIP_COLLECTSTATIC=1 \
 		web python manage.py check --deploy
