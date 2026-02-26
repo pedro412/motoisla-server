@@ -2,21 +2,12 @@
 
 Este backlog mantiene el orden del plan original y deja tareas ejecutables para siguientes agentes.
 
-## Prioridad 1 — Cerrar Fase 7 (Auditoría + Métricas)
-1. ✅ Expandir endpoint de métricas (`/api/v1/metrics/`):
-- ventas por rango de fechas
-- ticket promedio por rango
-- top productos por unidades e importe
-- desglose por método de pago
-2. ✅ Crear endpoint de reporte base admin readonly (`/api/v1/reports/sales/`).
-3. 🟡 Completar auditoría de eventos faltantes:
-- ✅ cambios sensibles de catálogo
-- ✅ ajustes manuales de inventario
-- ✅ operaciones manuales de ledger/inversionista (asignaciones auditadas)
-4. ✅ Añadir tests de consistencia base de métricas vs ventas confirmadas.
-5. Nuevo siguiente bloque:
-- extender reporte para incluir gastos (cuando módulo CRUD de gastos esté listo)
-- sumar pruebas de filtros límite (`top_limit`, rangos inválidos, respuesta vacía)
+## Prioridad 1 — Fase 7 (Auditoría + Métricas) cerrada
+1. ✅ Métricas ampliadas (`/api/v1/metrics/`) por rango/productos/pagos.
+2. ✅ Reporte admin (`/api/v1/reports/sales/`) por día/cajero.
+3. ✅ Integración de gastos en reportes (`expenses_summary`, `net_sales_after_expenses`).
+4. ✅ Auditoría ampliada (catálogo, inventario, inversionistas y gastos).
+5. ✅ Cobertura de tests de regresión para métricas/reportes y gastos.
 
 ## Prioridad 2 — Fase 8 (Hardening) cerrada
 1. ✅ Security checklist:
@@ -34,14 +25,18 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 - validar configuración CSRF/CORS con dominios reales de frontend en staging/prod
 - capturar baseline de performance con datos reales (latencia y query plans)
 
-## Prioridad 3 — Completar módulo de gastos (v1) (siguiente foco)
-1. API CRUD de gastos.
-2. Integración en métricas gerenciales.
-3. Tests de agregación por categoría y periodo.
+## Prioridad 3 — Módulo de gastos (v1) cerrado
+1. ✅ API CRUD de gastos.
+2. ✅ Integración en reportería gerencial base.
+3. ✅ Tests de agregación por categoría y periodo.
 
-## Prioridad 4 — Soporte frontend catalog-only
+## Prioridad 4 — Soporte frontend catalog-only (siguiente foco)
 1. Endpoint de catálogo público readonly (si se decide separarlo de auth).
 2. Rate limiting/caching básico para consulta pública.
+
+## Prioridad 5 — Seguimiento operativo
+1. Validar CSRF/CORS con dominios reales en staging/prod.
+2. Capturar baseline de performance (latencia p95 + query plans) con tráfico real.
 
 ## Notas para agentes
 - No romper contratos actuales de API (`code/detail/fields`, paginación DRF).

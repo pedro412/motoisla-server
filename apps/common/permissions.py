@@ -26,6 +26,8 @@ ROLE_CAPABILITIES = {
         "investor.manage",
         "ledger.manage",
         "metrics.view",
+        "expenses.view",
+        "expenses.manage",
     },
     UserRole.CASHIER: {
         "catalog.view",

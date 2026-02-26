@@ -3,9 +3,9 @@
 Referencia: `plan-maestro-v1.md` (v1)
 
 ## Resumen ejecutivo
-- Avance general estimado: **86-90% del backend v1**.
-- Fases cerradas: **0, 1, 2, 3, 4, 5, 6, 8**.
-- Fases pendientes: **7**.
+- Avance general estimado: **92-95% del backend v1**.
+- Fases cerradas: **0, 1, 2, 3, 4, 5, 6, 7, 8**.
+- Fases pendientes: **ninguna de backend core**.
 
 ## Estado por fase
 
@@ -55,7 +55,7 @@ Estado: ✅ Cerrada (núcleo)
 - Invariantes de capital/profit aplicadas en operaciones manuales.
 
 ### Fase 7 — Auditoría + Métricas base
-Estado: 🟡 Parcial
+Estado: ✅ Cerrada (scope backend)
 Completado:
 - Audit log de acciones críticas.
 - Métricas ampliadas en `/api/v1/metrics/`:
@@ -72,9 +72,17 @@ Completado:
   - `inventory.adjustment.create`
   - `investor.assignment.create|update|delete`
 - Tests agregados para métricas/reportes y auditoría de catálogo/inventario.
-Pendiente:
-- Endpoints/reportes gerenciales adicionales (gastos + cruces financieros).
-- Cobertura ampliada de auditoría cruzada para gastos y reportes financieros.
+- Módulo de gastos v1 completado:
+  - CRUD `/api/v1/expenses/` (admin)
+  - filtros por rango/categoría
+  - auditoría `expenses.create|update|delete`
+  - índices y constraint de monto positivo
+- Reporte de ventas integrado con gastos:
+  - `expenses_summary` (total + conteo + por categoría)
+  - `net_sales_after_expenses`
+- Tests de gastos y reporte con integración de gastos.
+Seguimiento funcional (iterativo):
+- ampliar reportería financiera avanzada según operación real (márgenes detallados, cortes ejecutivos adicionales).
 
 ### Fase 8 — Hardening release
 Estado: ✅ Cerrada (scope backend)
@@ -107,7 +115,7 @@ Seguimiento operativo (no bloqueante del cierre backend):
 - Ventas POS: ✅
 - Apartados/Saldo: ✅
 - Inversionistas/Ledger: ✅
-- Gastos: 🟡 Base de modelo
+- Gastos: ✅ CRUD + reportería base
 - Métricas/reportes: 🟡 Parcial
 - Usuarios/Roles/Accesos: ✅
 - Catálogo web (solo visualización): ⏳ Depende de frontend

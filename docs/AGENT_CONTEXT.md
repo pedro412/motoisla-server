@@ -26,13 +26,15 @@ Backend API de Moto Isla con Django + DRF + PostgreSQL para operación de tienda
 - `apps/expenses`: gastos (base).
 
 ## 4. Estado funcional (resumen)
-Implementado y funcional hasta Fase 6 del plan por capas:
+Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Fase 0-1: base técnica, JWT, roles, permisos y error contract.
 - Fase 2: catálogo + inventario.
 - Fase 3: imports + compras con parse/confirm y validaciones.
 - Fase 4: POS ventas con idempotencia, void window y override admin.
 - Fase 5: apartados/saldo a favor con vigencia y reglas estrictas.
 - Fase 6: inversionistas + ledger (depósito/retiro/reinversión + asignaciones).
+- Fase 7: métricas/reportes + auditoría ampliada + módulo gastos (CRUD e integración).
+- Fase 8: hardening base (security/performance/docs operativas).
 
 ## 5. Convenciones importantes
 - Idioma de plataforma: admin y backend base en inglés (`LANGUAGE_CODE = en-us`).
@@ -48,8 +50,10 @@ Implementado y funcional hasta Fase 6 del plan por capas:
 - Imports: `/api/v1/import-batches/`, `/api/v1/import-lines/{id}/`
 - Purchases: `/api/v1/purchase-receipts/`
 - Sales: `/api/v1/sales/`, `/api/v1/metrics/`
+- Reports: `/api/v1/reports/sales/`
 - Layaway: `/api/v1/layaways/`, `/api/v1/customer-credits/`
 - Investors: `/api/v1/investors/`, `/api/v1/investors/me/`
+- Expenses: `/api/v1/expenses/`
 
 ## 7. Comandos de trabajo
 - `make up`
@@ -63,13 +67,12 @@ Registrado:
 - accounts, catalog, inventory, purchases, sales, layaway, investors, ledger.
 
 ## 9. Riesgos actuales
-- Aún faltan reportes gerenciales completos (fase 7).
-- `expenses` existe como modelo base, sin módulo/reportería cerrada.
 - Fase 8 backend cerrada:
   - checklist de seguridad documentado
   - colección API QA disponible
   - runbook y DoD v1 documentados
   - índices y optimizaciones de query en módulos críticos
+- Reportería financiera avanzada aún iterativa (más cortes/márgenes ejecutivos).
 - Seguimiento operativo pendiente fuera de desarrollo backend:
   - validar CSRF/CORS con dominios reales en staging/prod
   - capturar baseline de performance p95 con tráfico real

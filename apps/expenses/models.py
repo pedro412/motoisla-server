@@ -11,3 +11,13 @@ class Expense(models.Model):
     expense_date = models.DateField()
     created_by = models.ForeignKey("accounts.User", on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-expense_date", "-created_at"]
+        indexes = [
+            models.Index(fields=["expense_date"], name="expense_date_idx"),
+            models.Index(fields=["category", "expense_date"], name="expense_category_date_idx"),
+        ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(amount__gt=0), name="expense_amount_gt_zero"),
+        ]

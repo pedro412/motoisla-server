@@ -61,6 +61,10 @@ Backend base de Moto Isla con **Django + DRF + JWT**, listo para correr en local
   - `POST /api/v1/sales/{id}/confirm/`
   - `POST /api/v1/sales/{id}/void/`
   - `GET /api/v1/metrics/`
+  - `GET /api/v1/reports/sales/`
+- Gastos:
+  - `GET/POST /api/v1/expenses/`
+  - `GET/PATCH/DELETE /api/v1/expenses/{id}/`
 - Apartados:
   - `GET/POST /api/v1/layaways/`
   - `POST /api/v1/layaways/{id}/settle/`

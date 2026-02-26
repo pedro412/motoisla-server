@@ -7,6 +7,7 @@ from rest_framework import serializers
 from rest_framework.response import Response
 
 from apps.common.permissions import RolePermission
+from apps.expenses.models import Expense
 from apps.sales.models import Payment, PaymentMethod, Sale, SaleLine, SaleStatus
 
 
@@ -119,6 +120,41 @@ class SalesMetricsMixin:
             .order_by("-total_sales")
         )
 
+    @staticmethod
+    def _expenses_queryset(date_from, date_to):
+        queryset = Expense.objects.all()
+        if date_from:
+            queryset = queryset.filter(expense_date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(expense_date__lte=date_to)
+        return queryset
+
+    @staticmethod
+    def _expenses_summary(expenses):
+        return expenses.aggregate(
+            total_expenses=Coalesce(
+                Sum("amount"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=16, decimal_places=2),
+            ),
+            expenses_count=Count("id"),
+        )
+
+    @staticmethod
+    def _expenses_by_category(expenses):
+        return list(
+            expenses.values("category")
+            .annotate(
+                total_amount=Coalesce(
+                    Sum("amount"),
+                    Value(Decimal("0.00")),
+                    output_field=DecimalField(max_digits=16, decimal_places=2),
+                ),
+                items_count=Count("id"),
+            )
+            .order_by("-total_amount", "category")
+        )
+
     def _build_metrics_payload(self, params):
         date_from = params.get("date_from")
         date_to = params.get("date_to")
@@ -148,9 +184,21 @@ class SalesReportView(SalesMetricsMixin, generics.GenericAPIView):
         query_serializer = SalesMetricsQuerySerializer(data=request.query_params)
         query_serializer.is_valid(raise_exception=True)
         metrics_payload, confirmed_sales = self._build_metrics_payload(query_serializer.validated_data)
+        expenses = self._expenses_queryset(
+            query_serializer.validated_data.get("date_from"),
+            query_serializer.validated_data.get("date_to"),
+        )
+        expense_summary = self._expenses_summary(expenses)
         report_payload = {
             **metrics_payload,
             "sales_by_day": self._sales_by_day(confirmed_sales),
             "sales_by_cashier": self._sales_by_cashier(confirmed_sales),
+            "expenses_summary": {
+                **expense_summary,
+                "by_category": self._expenses_by_category(expenses),
+            },
+            "net_sales_after_expenses": (
+                Decimal(str(metrics_payload["total_sales"])) - Decimal(str(expense_summary["total_expenses"]))
+            ).quantize(Decimal("0.01")),
         }
         return Response(report_payload)

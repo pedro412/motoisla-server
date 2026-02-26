@@ -9,6 +9,7 @@ from rest_framework.test import APITestCase
 
 from apps.audit.models import AuditLog
 from apps.catalog.models import Product
+from apps.expenses.models import Expense
 from apps.inventory.models import InventoryMovement
 from apps.investors.models import Investor
 from apps.ledger.models import LedgerEntry
@@ -529,3 +530,52 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(cashiers["cashier"]["sales_count"], 1)
         self.assertEqual(Decimal(str(cashiers["cashier2"]["total_sales"])), Decimal("150.00"))
         self.assertEqual(cashiers["cashier2"]["sales_count"], 1)
+
+    def test_sales_report_includes_expenses_summary(self):
+        self.auth_as("admin", "admin123")
+        now = timezone.now()
+        Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            subtotal=Decimal("300.00"),
+            discount_amount=Decimal("0.00"),
+            total=Decimal("300.00"),
+            confirmed_at=now,
+        )
+        Expense.objects.create(
+            category="Rent",
+            description="Store rent",
+            amount=Decimal("120.00"),
+            expense_date=now.date(),
+            created_by=self.admin,
+        )
+        Expense.objects.create(
+            category="Utilities",
+            description="Electricity",
+            amount=Decimal("30.00"),
+            expense_date=now.date(),
+            created_by=self.admin,
+        )
+        Expense.objects.create(
+            category="Rent",
+            description="Old rent",
+            amount=Decimal("999.00"),
+            expense_date=(now - timedelta(days=45)).date(),
+            created_by=self.admin,
+        )
+
+        response = self.client.get(
+            "/api/v1/reports/sales/",
+            {
+                "date_from": (now - timedelta(days=7)).date().isoformat(),
+                "date_to": now.date().isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("expenses_summary", response.data)
+        self.assertEqual(Decimal(str(response.data["expenses_summary"]["total_expenses"])), Decimal("150.00"))
+        self.assertEqual(response.data["expenses_summary"]["expenses_count"], 2)
+        by_category = {row["category"]: row for row in response.data["expenses_summary"]["by_category"]}
+        self.assertEqual(Decimal(str(by_category["Rent"]["total_amount"])), Decimal("120.00"))
+        self.assertEqual(Decimal(str(by_category["Utilities"]["total_amount"])), Decimal("30.00"))
+        self.assertEqual(Decimal(str(response.data["net_sales_after_expenses"])), Decimal("150.00"))
