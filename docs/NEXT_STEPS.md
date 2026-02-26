@@ -18,7 +18,7 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 - extender reporte para incluir gastos (cuando módulo CRUD de gastos esté listo)
 - sumar pruebas de filtros límite (`top_limit`, rangos inválidos, respuesta vacía)
 
-## Prioridad 2 — Cerrar Fase 8 (Hardening)
+## Prioridad 2 — Fase 8 (Hardening) cerrada
 1. ✅ Security checklist:
 - checklist documentado en `docs/SECURITY_CHECKLIST.md`
 - settings de prod endurecidos (`DEBUG`, hosts, secrets, CSRF/CORS, SSL/cookies/HSTS)
@@ -30,11 +30,11 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 - runbook de incidencias documentado (`docs/RUNBOOK.md`)
 4. ✅ Calidad:
 - DoD v1 documentada (`docs/DOD_V1.md`)
-5. Pendiente de cierre final Fase 8:
+5. Seguimiento operativo post-cierre:
 - validar configuración CSRF/CORS con dominios reales de frontend en staging/prod
 - capturar baseline de performance con datos reales (latencia y query plans)
 
-## Prioridad 3 — Completar módulo de gastos (v1)
+## Prioridad 3 — Completar módulo de gastos (v1) (siguiente foco)
 1. API CRUD de gastos.
 2. Integración en métricas gerenciales.
 3. Tests de agregación por categoría y periodo.
