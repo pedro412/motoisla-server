@@ -58,6 +58,16 @@ docker compose run --rm web python manage.py migrate
 ```bash
 docker compose run --rm web python manage.py seed_roles
 ```
+5. Seed base de proveedores/parsers (incluye MYESA):
+```bash
+docker compose run --rm web python manage.py seed_suppliers_parsers
+```
+6. Seed base de taxonomy de productos (marcas/tipos):
+```bash
+docker compose run --rm web python manage.py seed_product_taxonomy
+```
+
+Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed_product_taxonomy` corren automáticamente (idempotentes). Si necesitas omitirlos: `SKIP_SUPPLIER_SEED=1` y/o `SKIP_TAXONOMY_SEED=1`.
 
 ## Comandos útiles
 - `make up`
@@ -79,6 +89,8 @@ docker compose run --rm web python manage.py seed_roles
   - `GET/POST /api/v1/products/`
   - `GET/PATCH/DELETE /api/v1/products/{id}/`
   - `GET/POST /api/v1/product-images/`
+  - `GET/POST /api/v1/brands/`
+  - `GET/POST /api/v1/product-types/`
 - Catálogo público readonly:
   - `GET /api/v1/public/catalog/`
   - `GET /api/v1/public/catalog/{sku}/`
@@ -88,6 +100,12 @@ docker compose run --rm web python manage.py seed_roles
 - Compras:
   - `GET/POST /api/v1/purchase-receipts/`
   - `POST /api/v1/purchase-receipts/{id}/confirm/`
+  - `GET/POST /api/v1/import-batches/`
+  - `POST /api/v1/import-batches/preview-confirm/` (parse en cliente + confirmación transaccional)
+  - `POST /api/v1/import-batches/{id}/parse/` (legacy/compatibilidad)
+  - `POST /api/v1/import-batches/{id}/confirm/` (legacy/compatibilidad)
+  - `GET /api/v1/suppliers/`
+  - `GET /api/v1/supplier-parsers/?supplier=<uuid>`
 - Ventas:
   - `GET/POST /api/v1/sales/`
   - `POST /api/v1/sales/{id}/confirm/`
