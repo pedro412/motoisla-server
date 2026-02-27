@@ -1,23 +1,44 @@
 from rest_framework import serializers
 
+from apps.inventory.models import InventoryMovement
 from apps.purchases.models import PurchaseReceipt, PurchaseReceiptLine
 
 
+def receipt_can_delete(receipt: PurchaseReceipt) -> bool:
+    if receipt.status != "POSTED":
+        return True
+
+    for line in receipt.lines.all():
+        current_stock = InventoryMovement.current_stock(line.product_id)
+        if current_stock < line.qty:
+            return False
+    return True
+
+
 class PurchaseReceiptLineSerializer(serializers.ModelSerializer):
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    product_name = serializers.CharField(source="product.name", read_only=True)
+
     class Meta:
         model = PurchaseReceiptLine
-        fields = ["id", "product", "qty", "unit_cost", "unit_price"]
+        fields = ["id", "product", "product_sku", "product_name", "qty", "unit_cost", "unit_price"]
         read_only_fields = ["id"]
 
 
 class PurchaseReceiptSerializer(serializers.ModelSerializer):
     lines = PurchaseReceiptLineSerializer(many=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+    supplier_code = serializers.CharField(source="supplier.code", read_only=True)
+    created_by_username = serializers.CharField(source="created_by.username", read_only=True)
+    can_delete = serializers.SerializerMethodField()
 
     class Meta:
         model = PurchaseReceipt
         fields = [
             "id",
             "supplier",
+            "supplier_name",
+            "supplier_code",
             "invoice_number",
             "invoice_date",
             "status",
@@ -26,6 +47,8 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
             "total",
             "source_import_batch",
             "created_by",
+            "created_by_username",
+            "can_delete",
             "posted_at",
             "created_at",
             "lines",
@@ -59,3 +82,6 @@ class PurchaseReceiptSerializer(serializers.ModelSerializer):
         for line in lines:
             PurchaseReceiptLine.objects.create(receipt=receipt, **line)
         return receipt
+
+    def get_can_delete(self, obj):
+        return receipt_can_delete(obj)

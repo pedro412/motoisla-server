@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.catalog.models import Product, ProductImage
+from apps.catalog.models import Brand, Product, ProductImage, ProductType
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -12,6 +12,8 @@ class ProductImageSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     stock = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    brand_name = serializers.CharField(source="brand.name", read_only=True)
+    product_type_name = serializers.CharField(source="product_type.name", read_only=True)
 
     class Meta:
         model = Product
@@ -20,6 +22,12 @@ class ProductSerializer(serializers.ModelSerializer):
             "sku",
             "name",
             "default_price",
+            "brand",
+            "brand_name",
+            "product_type",
+            "product_type_name",
+            "brand_label",
+            "product_type_label",
             "is_active",
             "stock",
             "created_at",
@@ -49,3 +57,17 @@ class PublicCatalogProductSerializer(serializers.ModelSerializer):
             return primary.image_url
         first_image = next(iter(obj.images.all()), None)
         return first_image.image_url if first_image else None
+
+
+class BrandSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Brand
+        fields = ["id", "name", "normalized_name", "is_active", "created_at", "updated_at"]
+        read_only_fields = ["id", "normalized_name", "created_at", "updated_at"]
+
+
+class ProductTypeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductType
+        fields = ["id", "name", "normalized_name", "is_active", "created_at", "updated_at"]
+        read_only_fields = ["id", "normalized_name", "created_at", "updated_at"]
