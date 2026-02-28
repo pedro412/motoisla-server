@@ -252,6 +252,48 @@ CLAVE PRODUCTO: 46181705 CLAVE PEDIMENTO: 25 16 1767 5003910
         self.assertEqual(new_product.brand_id, self.brand_promoto.id)
         self.assertEqual(new_product.product_type_id, self.type_candados.id)
 
+    def test_preview_confirm_updates_existing_product_prices(self):
+        existing = Product.objects.create(
+            sku="5124-1037",
+            name="CANDADO EXISTENTE",
+            default_price=Decimal("250.00"),
+            cost_price=Decimal("150.00"),
+        )
+
+        response = self.client.post(
+            "/api/v1/import-batches/preview-confirm/",
+            {
+                "supplier": str(self.supplier_a.id),
+                "parser": str(self.parser_myesa.id),
+                "invoice_number": "FAC-1002",
+                "invoice_date": "2026-02-28",
+                "subtotal": "195.80",
+                "tax": "31.33",
+                "total": "227.13",
+                "raw_text": "RAW",
+                "lines": [
+                    {
+                        "sku": "5124-1037",
+                        "name": "CANDADO EXISTENTE",
+                        "qty": "1.00",
+                        "unit_cost": "195.80",
+                        "unit_price": "227.13",
+                        "public_price": "295.27",
+                        "brand_name": "PROMOTO",
+                        "product_type_name": "CANDADOS",
+                        "is_selected": True,
+                    }
+                ],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+
+        existing.refresh_from_db()
+        self.assertEqual(existing.cost_price, Decimal("195.80"))
+        self.assertEqual(existing.default_price, Decimal("295.27"))
+
     def test_preview_confirm_subtotal_mismatch(self):
         response = self.client.post(
             "/api/v1/import-batches/preview-confirm/",

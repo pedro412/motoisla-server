@@ -22,6 +22,13 @@ class InventoryMovementViewSet(viewsets.ModelViewSet):
         "destroy": ["inventory.manage"],
     }
 
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        product_id = self.request.query_params.get("product")
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+        return queryset
+
     def perform_create(self, serializer):
         movement = serializer.save()
         action = "inventory.adjustment.create" if movement.movement_type == MovementType.ADJUSTMENT else "inventory.movement.create"

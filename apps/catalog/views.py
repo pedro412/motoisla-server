@@ -44,10 +44,26 @@ class ProductViewSet(viewsets.ModelViewSet):
                 Subquery(stock_subquery, output_field=DecimalField(max_digits=12, decimal_places=2)),
                 Value(0, output_field=DecimalField(max_digits=12, decimal_places=2)),
             )
-        )
+        ).prefetch_related("images")
         query = self.request.query_params.get("q")
         if query:
             queryset = queryset.filter(Q(name__icontains=query) | Q(sku__icontains=query))
+
+        brand_id = self.request.query_params.get("brand")
+        if brand_id:
+            queryset = queryset.filter(brand_id=brand_id)
+
+        product_type_id = self.request.query_params.get("product_type")
+        if product_type_id:
+            queryset = queryset.filter(product_type_id=product_type_id)
+
+        has_stock = self.request.query_params.get("has_stock")
+        if has_stock is not None:
+            normalized_has_stock = has_stock.strip().lower()
+            if normalized_has_stock in {"1", "true", "yes"}:
+                queryset = queryset.filter(stock__gt=0)
+            elif normalized_has_stock in {"0", "false", "no"}:
+                queryset = queryset.filter(stock__lte=0)
         return queryset
 
     def perform_create(self, serializer):
@@ -61,6 +77,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "sku": product.sku,
                 "name": product.name,
                 "default_price": str(product.default_price),
+                "cost_price": str(product.cost_price) if product.cost_price is not None else None,
                 "is_active": product.is_active,
             },
         )
@@ -71,6 +88,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             "sku": old_product.sku,
             "name": old_product.name,
             "default_price": str(old_product.default_price),
+            "cost_price": str(old_product.cost_price) if old_product.cost_price is not None else None,
+            "stock": str(getattr(old_product, "stock", InventoryMovement.current_stock(old_product.id))),
             "is_active": old_product.is_active,
         }
         product = serializer.save()
@@ -78,6 +97,8 @@ class ProductViewSet(viewsets.ModelViewSet):
             "sku": product.sku,
             "name": product.name,
             "default_price": str(product.default_price),
+            "cost_price": str(product.cost_price) if product.cost_price is not None else None,
+            "stock": str(InventoryMovement.current_stock(product.id)),
             "is_active": product.is_active,
         }
         record_audit(
@@ -98,6 +119,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 "sku": instance.sku,
                 "name": instance.name,
                 "default_price": str(instance.default_price),
+                "cost_price": str(instance.cost_price) if instance.cost_price is not None else None,
                 "is_active": instance.is_active,
             },
         )

@@ -88,6 +88,7 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
 - Catálogo interno:
   - `GET/POST /api/v1/products/`
   - `GET/PATCH/DELETE /api/v1/products/{id}/`
+  - filtros soportados en `GET /api/v1/products/`: `q`, `brand`, `product_type`, `has_stock`
   - `GET/POST /api/v1/product-images/`
   - `GET/POST /api/v1/brands/`
   - `GET/POST /api/v1/product-types/`
@@ -96,6 +97,7 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
   - `GET /api/v1/public/catalog/{sku}/`
 - Inventario:
   - `GET/POST /api/v1/inventory/movements/`
+  - `GET /api/v1/inventory/movements/?product=<uuid>`
   - `GET /api/v1/inventory/stocks/`
 - Compras:
   - `GET/POST /api/v1/purchase-receipts/`
@@ -145,6 +147,11 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
   - cortes/márgenes ejecutivos adicionales.
 - Frontend:
   - consumir catálogo público y flujos POS/admin con contratos actuales.
+
+## Notas recientes
+- `Product` ya expone `cost_price` además de `default_price`.
+- `PATCH /api/v1/products/{id}/` soporta ajuste de stock con `stock` + `stock_adjust_reason`, creando movimiento auditado.
+- Reimportar una factura sobre un SKU existente actualiza `cost_price` y `default_price` del producto.
 
 ## Convenciones
 - Roles: `ADMIN`, `CASHIER`, `INVESTOR`.
