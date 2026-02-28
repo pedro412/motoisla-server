@@ -1,6 +1,5 @@
 from django.conf import settings
-from django.db.models import DecimalField, OuterRef, Q, Subquery, Sum, Value
-from django.db.models.functions import Coalesce
+from django.db.models import Q
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import cache_page
 from rest_framework import generics, viewsets
@@ -8,6 +7,7 @@ from rest_framework.permissions import AllowAny
 
 from apps.audit.services import record_audit
 from apps.catalog.models import Brand, Product, ProductImage, ProductType
+from apps.catalog.querysets import with_inventory_metrics
 from apps.catalog.serializers import (
     BrandSerializer,
     ProductImageSerializer,
@@ -33,18 +33,7 @@ class ProductViewSet(viewsets.ModelViewSet):
     }
 
     def get_queryset(self):
-        stock_subquery = (
-            InventoryMovement.objects.filter(product_id=OuterRef("pk"))
-            .values("product_id")
-            .annotate(total=Coalesce(Sum("quantity_delta"), Value(0, output_field=DecimalField(max_digits=12, decimal_places=2))))
-            .values("total")
-        )
-        queryset = Product.objects.all().annotate(
-            stock=Coalesce(
-                Subquery(stock_subquery, output_field=DecimalField(max_digits=12, decimal_places=2)),
-                Value(0, output_field=DecimalField(max_digits=12, decimal_places=2)),
-            )
-        ).prefetch_related("images")
+        queryset = with_inventory_metrics(Product.objects.all()).prefetch_related("images")
         query = self.request.query_params.get("q")
         if query:
             queryset = queryset.filter(Q(name__icontains=query) | Q(sku__icontains=query))

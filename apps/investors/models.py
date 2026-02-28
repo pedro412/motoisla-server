@@ -5,7 +5,7 @@ from django.db import models
 
 class Investor(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.OneToOneField("accounts.User", on_delete=models.CASCADE, related_name="investor_profile")
+    user = models.OneToOneField("accounts.User", on_delete=models.SET_NULL, related_name="investor_profile", null=True, blank=True)
     display_name = models.CharField(max_length=255)
     is_active = models.BooleanField(default=True)
 

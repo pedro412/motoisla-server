@@ -117,3 +117,23 @@ Content-Type: application/json
   "amount": "1000.00",
   "note": "QA deposit"
 }
+
+### Investor Purchase
+POST {{baseUrl}}/api/v1/investors/{{investorId}}/purchases/
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+  "tax_rate_pct": "16.00",
+  "lines": [
+    {
+      "product": "{{productId}}",
+      "qty": "1.00",
+      "unit_cost_gross": "58.00"
+    }
+  ]
+}
+
+### Investor Ledger
+GET {{baseUrl}}/api/v1/investors/{{investorId}}/ledger/
+Authorization: Bearer {{accessToken}}

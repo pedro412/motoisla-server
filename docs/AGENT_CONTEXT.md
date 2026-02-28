@@ -33,6 +33,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Fase 4: POS ventas con idempotencia, void window y override admin.
 - Fase 5: apartados/saldo a favor con vigencia y reglas estrictas.
 - Fase 6: inversionistas + ledger (depósito/retiro/reinversión + asignaciones).
+  - iteración operativa reciente: alta de inversionista sin usuario obligatorio, balances en list/detail, compra transaccional de productos y `investor_assignable_qty` en catálogo.
 - Fase 7: métricas/reportes + auditoría ampliada + módulo gastos (CRUD e integración).
 - Fase 8: hardening base (security/performance/docs operativas).
 
@@ -54,6 +55,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Public catalog: `/api/v1/public/catalog/`, `/api/v1/public/catalog/{sku}/`
 - Layaway: `/api/v1/layaways/`, `/api/v1/customer-credits/`
 - Investors: `/api/v1/investors/`, `/api/v1/investors/me/`
+  - incluye `POST /api/v1/investors/{id}/purchases/` y `GET /api/v1/investors/{id}/ledger/` paginado
 - Expenses: `/api/v1/expenses/`
 
 ## 7. Comandos de trabajo

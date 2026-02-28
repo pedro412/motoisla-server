@@ -1,6 +1,9 @@
 import uuid
+from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import DecimalField, ExpressionWrapper, F, Sum, Value
+from django.db.models.functions import Coalesce
 from rest_framework import serializers
 
 from apps.catalog.models import Brand, Product, ProductImage, ProductType
@@ -20,6 +23,7 @@ class ProductSerializer(serializers.ModelSerializer):
     primary_image_url = serializers.SerializerMethodField()
     brand_name = serializers.CharField(source="brand.name", read_only=True)
     product_type_name = serializers.CharField(source="product_type.name", read_only=True)
+    investor_assignable_qty = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -39,10 +43,11 @@ class ProductSerializer(serializers.ModelSerializer):
             "stock",
             "stock_adjust_reason",
             "primary_image_url",
+            "investor_assignable_qty",
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "created_at", "updated_at", "primary_image_url"]
+        read_only_fields = ["id", "created_at", "updated_at", "primary_image_url", "investor_assignable_qty"]
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -62,6 +67,30 @@ class ProductSerializer(serializers.ModelSerializer):
             return primary.image_url
         first_image = next(iter(obj.images.all()), None)
         return first_image.image_url if first_image else None
+
+    def get_investor_assignable_qty(self, obj):
+        current_stock = getattr(obj, "stock", None)
+        if current_stock is None:
+            current_stock = InventoryMovement.current_stock(obj.id)
+
+        reserved_qty = getattr(obj, "investor_reserved_qty", None)
+        if reserved_qty is None:
+            reserved_qty = obj.investor_assignments.aggregate(
+                total=Coalesce(
+                    Sum(
+                        ExpressionWrapper(
+                            F("qty_assigned") - F("qty_sold"),
+                            output_field=DecimalField(max_digits=12, decimal_places=2),
+                        )
+                    ),
+                    Value(0, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                )
+            )["total"]
+
+        assignable = current_stock - reserved_qty
+        if assignable < 0:
+            assignable = Decimal("0.00")
+        return f"{assignable:.2f}"
 
     def _create_stock_movement(self, product: Product, target_stock, reason: str, reference_type: str):
         current_stock = InventoryMovement.current_stock(product.id)

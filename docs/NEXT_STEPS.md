@@ -40,11 +40,16 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 ## Prioridad 5 — Seguimiento operativo
 1. Validar CSRF/CORS con dominios reales en staging/prod.
 2. Capturar baseline de performance (latencia p95 + query plans) con tráfico real.
+3. Endurecer concurrencia en compras de inversionistas para evitar sobreasignación bajo requests simultáneos.
 
 ## Prioridad 6 — Ventas (siguiente iteración UX/operación)
 1. Agregar filtros server-side para `GET /api/v1/sales/` (estatus, cajero, fecha, id).
 2. Evaluar endpoint de cobro atómico (`create + confirm`) para evitar drafts huérfanos cuando falla la confirmación.
 3. Exponer reportería de comisiones de tarjeta para utilidad operativa y conciliación.
+
+## Prioridad 7 — Inversionistas (siguiente iteración operativa)
+1. Exponer reinversión y filtros más finos de ledger para frontend.
+2. Evaluar locking explícito por producto/asignación para compras concurrentes.
 
 ## Notas para agentes
 - No romper contratos actuales de API (`code/detail/fields`, paginación DRF).
