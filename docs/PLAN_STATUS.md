@@ -57,6 +57,12 @@ Estado: ✅ Cerrada (núcleo)
 - Endpoints de consulta propia para inversionista.
 - Asignaciones de producto a inversionista.
 - Invariantes de capital/profit aplicadas en operaciones manuales.
+- Iteración operativa adicional:
+  - alta de inversionista sin usuario obligatorio con capital inicial opcional
+  - balances agregados en `GET /investors/` y `GET /investors/{id}/`
+  - compra transaccional en `POST /investors/{id}/purchases/`
+  - `GET /investors/{id}/ledger/` con paginación estándar
+  - `investor_assignable_qty` expuesto en productos para bloquear asignaciones duplicadas
 
 ### Fase 7 — Auditoría + Métricas base
 Estado: ✅ Cerrada (scope backend)
