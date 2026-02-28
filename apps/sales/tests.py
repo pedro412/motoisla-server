@@ -1,21 +1,22 @@
+import uuid
 from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
-from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from apps.audit.models import AuditLog
-from apps.catalog.models import Product
+from apps.catalog.models import Brand, Product, ProductType
 from apps.expenses.models import Expense
 from apps.inventory.models import InventoryMovement
+from apps.imports.models import InvoiceImportLine
 from apps.investors.models import Investor, InvestorAssignment
 from apps.ledger.models import LedgerEntry
 from apps.ledger.services import current_balances
 from apps.layaway.models import CustomerCredit, Layaway
-from apps.sales.models import CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus
+from apps.sales.models import CardCommissionPlan, CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus, VoidEvent
 from apps.suppliers.models import Supplier, SupplierInvoiceParser
 
 User = get_user_model()
@@ -58,6 +59,9 @@ class ApiFlowTests(APITestCase):
 
     def stock(self):
         return InventoryMovement.objects.filter(product=self.product).aggregate(total=Sum("quantity_delta"))["total"]
+
+    def card_plan(self, code):
+        return CardCommissionPlan.objects.get(code=code)
 
     def test_jwt_login_valid_and_invalid(self):
         ok = self.auth("admin", "admin123")
@@ -247,6 +251,95 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("card_type", response.data["fields"])
 
+    def test_sale_accepts_card_plan_and_persists_snapshot(self):
+        self.auth_as("cashier", "cashier123")
+        plan = self.card_plan("MSI_3")
+
+        response = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "50.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CARD", "amount": "100.00", "card_plan_id": str(plan.id)}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payment = Payment.objects.get(sale_id=response.data["id"])
+        self.assertEqual(payment.card_commission_plan_id, plan.id)
+        self.assertEqual(payment.card_plan_code, "MSI_3")
+        self.assertEqual(payment.card_plan_label, "3 MSI")
+        self.assertEqual(payment.installments_months, 3)
+        self.assertEqual(payment.commission_rate, Decimal("0.0558"))
+        self.assertEqual(payment.card_type, CardType.MSI_3)
+
+    def test_sale_legacy_card_type_persists_commission_snapshot(self):
+        self.auth_as("cashier", "cashier123")
+
+        response = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "50.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CARD", "amount": "100.00", "card_type": "NORMAL"}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payment = Payment.objects.get(sale_id=response.data["id"])
+        self.assertEqual(payment.card_plan_code, "NORMAL")
+        self.assertEqual(payment.card_plan_label, "Tarjeta")
+        self.assertEqual(payment.installments_months, 0)
+        self.assertEqual(payment.commission_rate, Decimal("0.0200"))
+        self.assertEqual(payment.card_type, CardType.NORMAL)
+
+    def test_sale_rejects_inactive_card_plan(self):
+        self.auth_as("cashier", "cashier123")
+        inactive_plan = CardCommissionPlan.objects.create(
+            code=f"CUSTOM_{uuid.uuid4().hex[:8].upper()}",
+            label="6 MSI",
+            installments_months=6,
+            commission_rate=Decimal("0.1000"),
+            is_active=False,
+            sort_order=20,
+        )
+
+        response = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "50.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CARD", "amount": "100.00", "card_plan_id": str(inactive_plan.id)}],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("payments", response.data["fields"])
+
     def test_cashier_discount_above_limit_requires_admin_override(self):
         self.auth_as("cashier", "cashier123")
         response = self.client.post(
@@ -302,6 +395,74 @@ class ApiFlowTests(APITestCase):
         response = self.client.post(f"/api/v1/sales/{sale.id}/void/", {"reason": "Autorizado"}, format="json")
         self.assertEqual(response.status_code, 200)
 
+    def test_card_commission_plan_list_returns_active_plans_only(self):
+        CardCommissionPlan.objects.create(
+            code="MSI_6",
+            label="6 MSI",
+            installments_months=6,
+            commission_rate=Decimal("0.0800"),
+            is_active=False,
+            sort_order=20,
+        )
+        self.auth_as("cashier", "cashier123")
+
+        response = self.client.get("/api/v1/card-commission-plans/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        self.assertEqual([item["code"] for item in response.data["results"]], ["NORMAL", "MSI_3"])
+
+    def test_sales_list_includes_history_fields_and_void_rules(self):
+        older = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            total=Decimal("90.00"),
+            confirmed_at=timezone.now() - timedelta(minutes=5),
+        )
+        latest = Sale.objects.create(
+            cashier=self.admin,
+            status=SaleStatus.CONFIRMED,
+            total=Decimal("120.00"),
+            confirmed_at=timezone.now() - timedelta(minutes=2),
+        )
+        voided = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.VOID,
+            total=Decimal("70.00"),
+            confirmed_at=timezone.now() - timedelta(minutes=1),
+            voided_at=timezone.now(),
+        )
+        Sale.objects.filter(id=older.id).update(created_at=timezone.now() - timedelta(hours=2))
+        Sale.objects.filter(id=latest.id).update(created_at=timezone.now())
+        Sale.objects.filter(id=voided.id).update(created_at=timezone.now() - timedelta(hours=1))
+        VoidEvent.objects.create(sale=voided, reason="Mistake", actor=self.cashier)
+
+        self.auth_as("cashier", "cashier123")
+        response = self.client.get("/api/v1/sales/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["results"][0]["id"], str(latest.id))
+        results_by_id = {row["id"]: row for row in response.data["results"]}
+        self.assertTrue(results_by_id[str(older.id)]["can_void"])
+        self.assertFalse(results_by_id[str(latest.id)]["can_void"])
+        self.assertEqual(results_by_id[str(voided.id)]["void_reason"], "Mistake")
+        self.assertFalse(results_by_id[str(voided.id)]["can_void"])
+
+    def test_sales_list_marks_admin_can_void_confirmed_sales(self):
+        sale = Sale.objects.create(
+            cashier=self.cashier,
+            status=SaleStatus.CONFIRMED,
+            total=Decimal("90.00"),
+            confirmed_at=timezone.now() - timedelta(minutes=120),
+        )
+
+        self.auth_as("admin", "admin123")
+        response = self.client.get("/api/v1/sales/")
+
+        self.assertEqual(response.status_code, 200)
+        results_by_id = {row["id"]: row for row in response.data["results"]}
+        self.assertTrue(results_by_id[str(sale.id)]["can_void"])
+
     def test_sale_update_endpoint_is_not_allowed(self):
         self.auth_as("cashier", "cashier123")
         sale_resp = self.client.post(
@@ -352,6 +513,15 @@ class ApiFlowTests(APITestCase):
         parsed = self.client.post(f"/api/v1/import-batches/{batch_id}/parse/", {}, format="json")
         self.assertEqual(parsed.status_code, 200)
         self.assertEqual(len(parsed.data["lines"]), 2)
+
+        brand = Brand.objects.create(name="Genérica")
+        product_type = ProductType.objects.create(name="Accesorio")
+        InvoiceImportLine.objects.filter(batch_id=batch_id).update(
+            brand=brand,
+            product_type=product_type,
+            brand_name=brand.name,
+            product_type_name=product_type.name,
+        )
 
         confirmed = self.client.post(f"/api/v1/import-batches/{batch_id}/confirm/", {}, format="json")
         self.assertEqual(confirmed.status_code, 201)

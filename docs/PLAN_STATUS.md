@@ -39,6 +39,10 @@ Estado: ✅ Cerrada (core)
 - Confirmación idempotente.
 - Anulación con ventana para cajero y mayor alcance para admin.
 - Descuento >10% requiere override admin.
+- Iteración operativa reciente:
+  - catálogo de planes de comisión de tarjeta configurable.
+  - snapshot de comisión por pago para utilidad/ledger histórico.
+  - `GET /sales/` enriquecido para historial UI (`cashier_username`, `void_reason`, `can_void`).
 
 ### Fase 5 — Apartados y Saldo a Favor
 Estado: ✅ Cerrada

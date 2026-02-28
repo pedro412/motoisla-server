@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.sales.models import Payment, Sale, SaleLine, VoidEvent
+from apps.sales.models import CardCommissionPlan, Payment, Sale, SaleLine, VoidEvent
 
 
 class SaleLineInline(admin.TabularInline):
@@ -31,10 +31,18 @@ class SaleLineAdmin(admin.ModelAdmin):
 
 @admin.register(Payment)
 class PaymentAdmin(admin.ModelAdmin):
-    list_display = ("sale", "method", "card_type", "amount")
-    list_filter = ("method", "card_type")
+    list_display = ("sale", "method", "card_type", "card_plan_label", "commission_rate", "amount")
+    list_filter = ("method", "card_type", "card_plan_code")
     search_fields = ("sale__id",)
     autocomplete_fields = ("sale",)
+
+
+@admin.register(CardCommissionPlan)
+class CardCommissionPlanAdmin(admin.ModelAdmin):
+    list_display = ("label", "code", "installments_months", "commission_rate", "is_active", "sort_order")
+    list_filter = ("is_active",)
+    search_fields = ("label", "code")
+    ordering = ("sort_order", "installments_months", "label")
 
 
 @admin.register(VoidEvent)

@@ -112,6 +112,7 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
   - `GET/POST /api/v1/sales/`
   - `POST /api/v1/sales/{id}/confirm/`
   - `POST /api/v1/sales/{id}/void/`
+  - `GET /api/v1/card-commission-plans/`
   - `GET /api/v1/metrics/`
   - `GET /api/v1/reports/sales/`
 - Gastos:
@@ -152,6 +153,8 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
 - `Product` ya expone `cost_price` además de `default_price`.
 - `PATCH /api/v1/products/{id}/` soporta ajuste de stock con `stock` + `stock_adjust_reason`, creando movimiento auditado.
 - Reimportar una factura sobre un SKU existente actualiza `cost_price` y `default_price` del producto.
+- `Payment` ahora guarda snapshot de comisión de tarjeta (`commission_rate`, plan y meses) para preservar utilidad histórica.
+- `GET /api/v1/sales/` expone `cashier_username`, `void_reason` y `can_void` para el historial operativo del cliente.
 
 ## Convenciones
 - Roles: `ADMIN`, `CASHIER`, `INVESTOR`.
