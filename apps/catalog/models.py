@@ -52,6 +52,7 @@ class Product(models.Model):
     sku = models.CharField(max_length=64, unique=True, db_index=True)
     name = models.CharField(max_length=255, db_index=True)
     default_price = models.DecimalField(max_digits=12, decimal_places=2)
+    cost_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     brand = models.ForeignKey(Brand, null=True, blank=True, on_delete=models.SET_NULL)
     product_type = models.ForeignKey(ProductType, null=True, blank=True, on_delete=models.SET_NULL)
     brand_label = models.CharField(max_length=80, blank=True)

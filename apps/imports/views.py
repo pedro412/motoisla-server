@@ -173,6 +173,13 @@ class InvoiceImportBatchViewSet(viewsets.ModelViewSet):
             normalized_sku = (line.sku or "").strip().upper()
             brand, product_type, brand_label, product_type_label = taxonomy_by_line[line.id]
             product = line.matched_product
+            target_default_price = (
+                line.public_price
+                if line.public_price is not None
+                else line.unit_price
+                if line.unit_price is not None
+                else line.unit_cost
+            )
             if product is None:
                 existing = Product.objects.filter(sku=normalized_sku).first()
                 if existing:
@@ -185,13 +192,8 @@ class InvoiceImportBatchViewSet(viewsets.ModelViewSet):
                         product_type=product_type,
                         brand_label=brand_label,
                         product_type_label=product_type_label,
-                        default_price=(
-                            line.public_price
-                            if line.public_price is not None
-                            else line.unit_price
-                            if line.unit_price is not None
-                            else line.unit_cost
-                        ),
+                        cost_price=line.unit_cost,
+                        default_price=target_default_price,
                     )
             product_fields = []
             if product.brand_id is None and brand is not None:
@@ -206,6 +208,12 @@ class InvoiceImportBatchViewSet(viewsets.ModelViewSet):
             if not product.product_type_label and product_type_label:
                 product.product_type_label = product_type_label
                 product_fields.append("product_type_label")
+            if line.unit_cost is not None and product.cost_price != line.unit_cost:
+                product.cost_price = line.unit_cost
+                product_fields.append("cost_price")
+            if target_default_price is not None and product.default_price != target_default_price:
+                product.default_price = target_default_price
+                product_fields.append("default_price")
             if product_fields:
                 product.save(update_fields=product_fields)
 
