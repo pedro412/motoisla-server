@@ -41,6 +41,11 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 1. Validar CSRF/CORS con dominios reales en staging/prod.
 2. Capturar baseline de performance (latencia p95 + query plans) con tráfico real.
 
+## Prioridad 6 — Ventas (siguiente iteración UX/operación)
+1. Agregar filtros server-side para `GET /api/v1/sales/` (estatus, cajero, fecha, id).
+2. Evaluar endpoint de cobro atómico (`create + confirm`) para evitar drafts huérfanos cuando falla la confirmación.
+3. Exponer reportería de comisiones de tarjeta para utilidad operativa y conciliación.
+
 ## Notas para agentes
 - No romper contratos actuales de API (`code/detail/fields`, paginación DRF).
 - Mantener reglas de negocio ya cerradas en fases 3-6.

@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import generics, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
@@ -13,16 +13,27 @@ from apps.common.permissions import RolePermission
 from apps.inventory.models import InventoryMovement, MovementType
 from apps.investors.models import InvestorAssignment
 from apps.ledger.models import LedgerEntry, LedgerEntryType
-from apps.sales.models import CardType, PaymentMethod, Sale, SaleStatus, VoidEvent
-from apps.sales.serializers import SaleSerializer
+from apps.sales.models import LEGACY_CARD_TYPE_TO_RATE, CardCommissionPlan, PaymentMethod, Sale, SaleStatus, VoidEvent
+from apps.sales.serializers import CardCommissionPlanSerializer, SaleListSerializer, SaleSerializer, VOID_WINDOW_MINUTES
 
-VOID_WINDOW_MINUTES = 10
-CARD_NORMAL_COMMISSION = Decimal("0.02")
-CARD_MSI3_COMMISSION = Decimal("0.0558")
+
+class CardCommissionPlanListView(generics.ListAPIView):
+    serializer_class = CardCommissionPlanSerializer
+    permission_classes = [RolePermission]
+    capability_map = {
+        "get": ["sales.view"],
+    }
+
+    def get_queryset(self):
+        return CardCommissionPlan.objects.filter(is_active=True).order_by("sort_order", "installments_months", "label")
 
 
 class SaleViewSet(viewsets.ModelViewSet):
-    queryset = Sale.objects.select_related("cashier").prefetch_related("lines", "payments")
+    queryset = (
+        Sale.objects.select_related("cashier", "void_event")
+        .prefetch_related("lines", "payments__card_commission_plan")
+        .order_by("-created_at")
+    )
     serializer_class = SaleSerializer
     permission_classes = [RolePermission]
     http_method_names = ["get", "post", "head", "options"]
@@ -33,6 +44,11 @@ class SaleViewSet(viewsets.ModelViewSet):
         "confirm": ["sales.confirm"],
         "void": ["sales.void.own_window"],
     }
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return SaleListSerializer
+        return SaleSerializer
 
     @action(detail=True, methods=["post"])
     def confirm(self, request, pk=None):
@@ -238,11 +254,12 @@ class SaleViewSet(viewsets.ModelViewSet):
         for payment in sale.payments.all():
             if payment.method != PaymentMethod.CARD:
                 continue
-            if payment.card_type == CardType.MSI_3:
-                commission_total += payment.amount * CARD_MSI3_COMMISSION
-            else:
-                commission_total += payment.amount * CARD_NORMAL_COMMISSION
+            commission_rate = payment.commission_rate
+            if commission_rate is None:
+                commission_rate = LEGACY_CARD_TYPE_TO_RATE.get(payment.card_type, Decimal("0"))
+            commission_total += payment.amount * commission_rate
         return commission_total
+
     @staticmethod
     def _resolve_role(user):
         group_names = set(user.groups.values_list("name", flat=True))

@@ -1,4 +1,5 @@
 import uuid
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -18,6 +19,14 @@ class PaymentMethod(models.TextChoices):
 class CardType(models.TextChoices):
     NORMAL = "NORMAL", "Normal"
     MSI_3 = "MSI_3", "3MSI"
+
+
+CARD_NORMAL_COMMISSION = Decimal("0.02")
+CARD_MSI3_COMMISSION = Decimal("0.0558")
+LEGACY_CARD_TYPE_TO_RATE = {
+    CardType.NORMAL: CARD_NORMAL_COMMISSION,
+    CardType.MSI_3: CARD_MSI3_COMMISSION,
+}
 
 
 class Sale(models.Model):
@@ -59,12 +68,44 @@ class SaleLine(models.Model):
             raise ValidationError("discount_pct must be between 0 and 100")
 
 
+class CardCommissionPlan(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(max_length=32, unique=True)
+    label = models.CharField(max_length=64)
+    installments_months = models.PositiveIntegerField(default=0)
+    commission_rate = models.DecimalField(max_digits=6, decimal_places=4)
+    is_active = models.BooleanField(default=True)
+    sort_order = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["sort_order", "installments_months", "label"]
+        indexes = [
+            models.Index(fields=["is_active", "sort_order"], name="cardplan_active_sort_idx"),
+        ]
+
+    def __str__(self):
+        return self.label
+
+
 class Payment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="payments")
     method = models.CharField(max_length=10, choices=PaymentMethod.choices)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     card_type = models.CharField(max_length=12, choices=CardType.choices, null=True, blank=True)
+    card_commission_plan = models.ForeignKey(
+        CardCommissionPlan,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="payments",
+    )
+    commission_rate = models.DecimalField(max_digits=6, decimal_places=4, null=True, blank=True)
+    card_plan_code = models.CharField(max_length=32, blank=True, default="")
+    card_plan_label = models.CharField(max_length=64, blank=True, default="")
+    installments_months = models.PositiveIntegerField(default=0)
 
     class Meta:
         indexes = [
