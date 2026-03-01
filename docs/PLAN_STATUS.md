@@ -47,9 +47,15 @@ Estado: ✅ Cerrada (core)
 ### Fase 5 — Apartados y Saldo a Favor
 Estado: ✅ Cerrada
 - Reserva inventario en apartado.
-- Liquidación con validación de saldo exacto.
+- Liquidación genera la venta real y preserva trazabilidad.
 - Expiración con crédito a favor y liberación de inventario.
 - Aplicación de crédito vía endpoint.
+- Iteración operativa reciente:
+  - `Customer` unificado por teléfono para apartados y ventas POS.
+  - apartados multiproducto con líneas y múltiples abonos.
+  - extensión de fecha límite con historial.
+  - vencimiento automático/manual con saldo a favor por el total abonado.
+  - anulación de venta originada en apartado marca el apartado como `REFUNDED`.
 
 ### Fase 6 — Inversionistas + Ledger
 Estado: ✅ Cerrada (núcleo)

@@ -2,11 +2,13 @@ from datetime import timedelta
 from decimal import Decimal
 
 from django.contrib.auth import authenticate
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import serializers
 
 from apps.accounts.models import UserRole
 from apps.audit.services import record_audit
+from apps.layaway.models import Customer, CustomerCredit, normalize_phone
 from apps.sales.models import (
     CardCommissionPlan,
     CardType,
@@ -21,9 +23,12 @@ VOID_WINDOW_MINUTES = 10
 
 
 class SaleLineSerializer(serializers.ModelSerializer):
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    product_name = serializers.CharField(source="product.name", read_only=True)
+
     class Meta:
         model = SaleLine
-        fields = ["id", "product", "qty", "unit_price", "unit_cost", "discount_pct"]
+        fields = ["id", "product", "product_sku", "product_name", "qty", "unit_price", "unit_cost", "discount_pct"]
         read_only_fields = ["id"]
 
 
@@ -76,6 +81,10 @@ class CardCommissionPlanSerializer(serializers.ModelSerializer):
 class SaleSerializer(serializers.ModelSerializer):
     lines = SaleLineSerializer(many=True)
     payments = PaymentSerializer(many=True)
+    cashier_username = serializers.CharField(source="cashier.username", read_only=True)
+    customer_summary = serializers.SerializerMethodField()
+    customer_phone = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    customer_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     override_admin_username = serializers.CharField(write_only=True, required=False, allow_blank=False)
     override_admin_password = serializers.CharField(write_only=True, required=False, allow_blank=False)
     override_reason = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -85,6 +94,7 @@ class SaleSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "cashier",
+            "cashier_username",
             "status",
             "subtotal",
             "discount_amount",
@@ -94,6 +104,9 @@ class SaleSerializer(serializers.ModelSerializer):
             "created_at",
             "lines",
             "payments",
+            "customer_summary",
+            "customer_phone",
+            "customer_name",
             "override_admin_username",
             "override_admin_password",
             "override_reason",
@@ -101,6 +114,7 @@ class SaleSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "cashier",
+            "cashier_username",
             "status",
             "subtotal",
             "discount_amount",
@@ -108,6 +122,7 @@ class SaleSerializer(serializers.ModelSerializer):
             "confirmed_at",
             "voided_at",
             "created_at",
+            "customer_summary",
         ]
 
     @staticmethod
@@ -141,6 +156,8 @@ class SaleSerializer(serializers.ModelSerializer):
         payments = attrs.get("payments", [])
         override_admin_username = attrs.get("override_admin_username")
         override_admin_password = attrs.get("override_admin_password")
+        customer_phone = str(attrs.get("customer_phone", "")).strip()
+        customer_name = str(attrs.get("customer_name", "")).strip()
 
         if not lines:
             raise serializers.ValidationError({"lines": "Debes incluir al menos una linea de venta."})
@@ -190,6 +207,7 @@ class SaleSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"override_admin_username": "El usuario override debe ser admin."})
 
         payments_sum = Decimal("0")
+        credit_requested = Decimal("0")
         for payment in payments:
             if payment["amount"] <= 0:
                 raise serializers.ValidationError({"amount": "El monto de pago debe ser mayor a 0."})
@@ -226,61 +244,102 @@ class SaleSerializer(serializers.ModelSerializer):
                 payment["card_plan_label"] = ""
                 payment["installments_months"] = 0
                 payment["card_type"] = None
+            if payment["method"] == PaymentMethod.CUSTOMER_CREDIT:
+                if not customer_phone:
+                    raise serializers.ValidationError(
+                        {"customer_phone": "Debes capturar telefono del cliente para aplicar saldo a favor."}
+                    )
+                credit_requested += payment["amount"]
             payments_sum += payment["amount"]
         payments_sum = payments_sum.quantize(Decimal("0.01"))
 
         if payments_sum != total:
             raise serializers.ValidationError({"payments": "La suma de pagos debe coincidir con el total de la venta."})
+        if customer_phone and not normalize_phone(customer_phone):
+            raise serializers.ValidationError({"customer_phone": "El telefono es invalido."})
+        if credit_requested > 0:
+            customer = Customer.objects.filter(phone_normalized=normalize_phone(customer_phone)).first()
+            if not customer:
+                raise serializers.ValidationError({"customer_phone": "No existe un cliente con ese telefono."})
+            credit = CustomerCredit.objects.filter(customer=customer).first()
+            available = credit.balance if credit else Decimal("0.00")
+            if credit_requested > available:
+                raise serializers.ValidationError({"payments": "El saldo a favor solicitado excede el disponible."})
+            attrs["_customer"] = customer
+        elif customer_phone:
+            attrs["_customer"] = None
         attrs["_override_admin_user"] = override_admin_user
         return attrs
 
     def create(self, validated_data):
         lines = validated_data.pop("lines", [])
         payments = validated_data.pop("payments", [])
+        customer_phone = str(validated_data.pop("customer_phone", "")).strip()
+        customer_name = str(validated_data.pop("customer_name", "")).strip()
         override_admin_user = validated_data.pop("_override_admin_user", None)
+        preloaded_customer = validated_data.pop("_customer", None)
         override_reason = validated_data.pop("override_reason", "")
         validated_data.pop("override_admin_username", None)
         validated_data.pop("override_admin_password", None)
-        sale = Sale.objects.create(cashier=self.context["request"].user)
+        customer = None
+        if customer_phone:
+            customer = preloaded_customer or Customer.get_or_create_by_phone(phone=customer_phone, name=customer_name or customer_phone)
+        with transaction.atomic():
+            sale = Sale.objects.create(cashier=self.context["request"].user, customer=customer)
 
-        subtotal = Decimal("0")
-        discount_total = Decimal("0")
-        for line in lines:
-            line_obj = SaleLine.objects.create(sale=sale, **line)
-            line_amount = line_obj.qty * line_obj.unit_price
-            discount = (line_amount * line_obj.discount_pct) / Decimal("100")
-            subtotal += line_amount
-            discount_total += discount
+            subtotal = Decimal("0")
+            discount_total = Decimal("0")
+            for line in lines:
+                line_obj = SaleLine.objects.create(sale=sale, **line)
+                line_amount = line_obj.qty * line_obj.unit_price
+                discount = (line_amount * line_obj.discount_pct) / Decimal("100")
+                subtotal += line_amount
+                discount_total += discount
 
-        subtotal = subtotal.quantize(Decimal("0.01"))
-        discount_total = discount_total.quantize(Decimal("0.01"))
-        total = (subtotal - discount_total).quantize(Decimal("0.01"))
-        for payment in payments:
-            Payment.objects.create(sale=sale, **payment)
+            subtotal = subtotal.quantize(Decimal("0.01"))
+            discount_total = discount_total.quantize(Decimal("0.01"))
+            total = (subtotal - discount_total).quantize(Decimal("0.01"))
+            for payment in payments:
+                Payment.objects.create(sale=sale, **payment)
 
-        sale.subtotal = subtotal
-        sale.discount_amount = discount_total
-        sale.total = total
-        sale.save(update_fields=["subtotal", "discount_amount", "total"])
+            sale.subtotal = subtotal
+            sale.discount_amount = discount_total
+            sale.total = total
+            sale.save(update_fields=["subtotal", "discount_amount", "total"])
 
-        if override_admin_user:
-            record_audit(
-                actor=self.context["request"].user,
-                action="sale.discount_override",
-                entity_type="sale",
-                entity_id=sale.id,
-                payload={
-                    "admin_user_id": str(override_admin_user.id),
-                    "reason": override_reason or "",
-                    "discount_amount": str(discount_total),
-                },
-            )
+            if override_admin_user:
+                record_audit(
+                    actor=self.context["request"].user,
+                    action="sale.discount_override",
+                    entity_type="sale",
+                    entity_id=sale.id,
+                    payload={
+                        "admin_user_id": str(override_admin_user.id),
+                        "reason": override_reason or "",
+                        "discount_amount": str(discount_total),
+                    },
+                )
         return sale
+
+    def get_customer_summary(self, obj):
+        customer = getattr(obj, "customer", None)
+        if not customer:
+            return None
+        sales_qs = customer.sales.all()
+        return {
+            "id": str(customer.id),
+            "name": customer.name,
+            "phone": customer.phone,
+            "sales_count": sales_qs.count(),
+            "confirmed_sales_count": sales_qs.filter(status=SaleStatus.CONFIRMED).count(),
+        }
 
 
 class SaleListSerializer(serializers.ModelSerializer):
     payments = PaymentSummarySerializer(many=True, read_only=True)
     cashier_username = serializers.CharField(source="cashier.username", read_only=True)
+    customer_name = serializers.CharField(source="customer.name", read_only=True)
+    customer_phone = serializers.CharField(source="customer.phone", read_only=True)
     void_reason = serializers.SerializerMethodField()
     can_void = serializers.SerializerMethodField()
 
@@ -295,6 +354,8 @@ class SaleListSerializer(serializers.ModelSerializer):
             "voided_at",
             "cashier",
             "cashier_username",
+            "customer_name",
+            "customer_phone",
             "payments",
             "void_reason",
             "can_void",

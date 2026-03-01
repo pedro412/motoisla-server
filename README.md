@@ -15,6 +15,7 @@ Base técnica: **Django + DRF + JWT + PostgreSQL**, listo para correr local con 
 - Venta confirmada es la que impacta stock/métricas/ledger.
 - Reintentos de confirmación no deben duplicar impacto.
 - Cancelación (`void`) revierte inventario y, para productos de inversionista, revierte también asignación/ledger.
+- Si una venta anulada provenía de un apartado liquidado, el apartado pasa a `REFUNDED` para conservar trazabilidad.
 - Descuento cajero >10% requiere override admin.
 - Apartados vencidos pasan a saldo a favor, no reembolso en efectivo.
 
@@ -35,7 +36,7 @@ Base técnica: **Django + DRF + JWT + PostgreSQL**, listo para correr local con 
 - `apps/imports`: parse/edición/confirmación de factura pegada.
 - `apps/purchases`: recepciones de compra.
 - `apps/sales`: ventas, confirmación, anulación, métricas y reportes.
-- `apps/layaway`: apartados y saldo a favor.
+- `apps/layaway`: clientes, apartados multiproducto, saldo a favor y vencimiento automático/manual.
 - `apps/investors` + `apps/ledger`: inversionistas, asignaciones y movimientos financieros.
 - `apps/expenses`: gastos administrativos.
 - `apps/audit`: auditoría de eventos críticos.
@@ -110,17 +111,23 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
   - `GET /api/v1/supplier-parsers/?supplier=<uuid>`
 - Ventas:
   - `GET/POST /api/v1/sales/`
+  - `GET /api/v1/sales/{id}/`
   - `POST /api/v1/sales/{id}/confirm/`
   - `POST /api/v1/sales/{id}/void/`
   - `GET /api/v1/card-commission-plans/`
   - `GET /api/v1/metrics/`
   - `GET /api/v1/reports/sales/`
+- Clientes:
+  - `GET/POST /api/v1/customers/`
+  - `GET /api/v1/customers/{id}/`
 - Gastos:
   - `GET/POST /api/v1/expenses/`
   - `GET/PATCH/DELETE /api/v1/expenses/{id}/`
 - Apartados:
   - `GET/POST /api/v1/layaways/`
+  - `POST /api/v1/layaways/{id}/payments/`
   - `POST /api/v1/layaways/{id}/settle/`
+  - `POST /api/v1/layaways/{id}/extend/`
   - `POST /api/v1/layaways/{id}/expire/`
   - `POST /api/v1/customer-credits/{id}/apply/`
 - Inversionistas:
@@ -154,7 +161,9 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
 - `PATCH /api/v1/products/{id}/` soporta ajuste de stock con `stock` + `stock_adjust_reason`, creando movimiento auditado.
 - Reimportar una factura sobre un SKU existente actualiza `cost_price` y `default_price` del producto.
 - `Payment` ahora guarda snapshot de comisión de tarjeta (`commission_rate`, plan y meses) para preservar utilidad histórica.
-- `GET /api/v1/sales/` expone `cashier_username`, `void_reason` y `can_void` para el historial operativo del cliente.
+- `GET /api/v1/sales/` expone `cashier_username`, cliente ligado y `can_void` para el historial operativo.
+- `GET /api/v1/sales/{id}/` expone líneas enriquecidas (`product_name`, `product_sku`) y resumen del cliente para historial y lealtad.
+- `Layaway` ahora soporta cliente unificado por teléfono, líneas múltiples, múltiples abonos, extensión y estados `SETTLED` / `REFUNDED`.
 
 ## Convenciones
 - Roles: `ADMIN`, `CASHIER`, `INVESTOR`.
