@@ -12,6 +12,7 @@ from apps.audit.services import record_audit
 from apps.common.permissions import RolePermission
 from apps.inventory.models import InventoryMovement, MovementType
 from apps.investors.models import InvestorAssignment
+from apps.layaway.models import CustomerCredit, Layaway, LayawayStatus
 from apps.ledger.models import LedgerEntry, LedgerEntryType
 from apps.sales.models import LEGACY_CARD_TYPE_TO_RATE, CardCommissionPlan, PaymentMethod, Sale, SaleStatus, VoidEvent
 from apps.sales.serializers import CardCommissionPlanSerializer, SaleListSerializer, SaleSerializer, VOID_WINDOW_MINUTES
@@ -30,7 +31,7 @@ class CardCommissionPlanListView(generics.ListAPIView):
 
 class SaleViewSet(viewsets.ModelViewSet):
     queryset = (
-        Sale.objects.select_related("cashier", "void_event")
+        Sale.objects.select_related("cashier", "void_event", "customer")
         .prefetch_related("lines", "payments__card_commission_plan")
         .order_by("-created_at")
     )
@@ -58,39 +59,43 @@ class SaleViewSet(viewsets.ModelViewSet):
         if sale.status == SaleStatus.VOID:
             return Response({"code": "invalid_state", "detail": "No puedes confirmar una venta cancelada.", "fields": {}}, status=400)
 
-        with transaction.atomic():
-            for line in sale.lines.all():
-                InventoryMovement.objects.create(
-                    product=line.product,
-                    movement_type=MovementType.OUTBOUND,
-                    quantity_delta=-line.qty,
-                    reference_type="sale_confirm",
-                    reference_id=str(sale.id),
-                    note="Sale confirmation",
-                    created_by=request.user,
-                )
-                self._apply_investor_ledger_for_line(sale, line)
+        try:
+            with transaction.atomic():
+                self._apply_customer_credit_if_needed(sale)
+                for line in sale.lines.all():
+                    InventoryMovement.objects.create(
+                        product=line.product,
+                        movement_type=MovementType.OUTBOUND,
+                        quantity_delta=-line.qty,
+                        reference_type="sale_confirm",
+                        reference_id=str(sale.id),
+                        note="Sale confirmation",
+                        created_by=request.user,
+                    )
+                    self._apply_investor_ledger_for_line(sale, line)
 
-            sale.status = SaleStatus.CONFIRMED
-            sale.confirmed_at = timezone.now()
-            sale.save(update_fields=["status", "confirmed_at"])
+                sale.status = SaleStatus.CONFIRMED
+                sale.confirmed_at = timezone.now()
+                sale.save(update_fields=["status", "confirmed_at"])
 
-            if sale.discount_amount > 0:
+                if sale.discount_amount > 0:
+                    record_audit(
+                        actor=request.user,
+                        action="sale.discount",
+                        entity_type="sale",
+                        entity_id=sale.id,
+                        payload={"discount_amount": str(sale.discount_amount)},
+                    )
+
                 record_audit(
                     actor=request.user,
-                    action="sale.discount",
+                    action="sale.confirm",
                     entity_type="sale",
                     entity_id=sale.id,
-                    payload={"discount_amount": str(sale.discount_amount)},
+                    payload={"total": str(sale.total)},
                 )
-
-            record_audit(
-                actor=request.user,
-                action="sale.confirm",
-                entity_type="sale",
-                entity_id=sale.id,
-                payload={"total": str(sale.total)},
-            )
+        except ValueError as exc:
+            return Response({"code": "invalid_payment", "detail": str(exc), "fields": {}}, status=400)
 
         return Response(self.get_serializer(sale).data, status=200)
 
@@ -120,6 +125,7 @@ class SaleViewSet(viewsets.ModelViewSet):
         reason = request.data.get("reason", "Sin motivo")
 
         with transaction.atomic():
+            self._restore_customer_credit_if_needed(sale)
             for line in sale.lines.all():
                 InventoryMovement.objects.create(
                     product=line.product,
@@ -131,6 +137,8 @@ class SaleViewSet(viewsets.ModelViewSet):
                     created_by=request.user,
                 )
                 self._revert_investor_ledger_for_line(sale, line)
+
+            self._mark_layaway_refunded_if_linked(sale, request.user)
 
             sale.status = SaleStatus.VOID
             sale.voided_at = timezone.now()
@@ -259,6 +267,57 @@ class SaleViewSet(viewsets.ModelViewSet):
                 commission_rate = LEGACY_CARD_TYPE_TO_RATE.get(payment.card_type, Decimal("0"))
             commission_total += payment.amount * commission_rate
         return commission_total
+
+    @staticmethod
+    def _apply_customer_credit_if_needed(sale):
+        credit_amount = sum(
+            (payment.amount for payment in sale.payments.all() if payment.method == PaymentMethod.CUSTOMER_CREDIT),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01"))
+        if credit_amount <= 0:
+            return
+        if not sale.customer_id:
+            raise ValueError("La venta no tiene cliente asociado para aplicar saldo a favor.")
+        credit = CustomerCredit.objects.select_for_update().filter(customer=sale.customer).first()
+        available = credit.balance if credit else Decimal("0.00")
+        if credit_amount > available:
+            raise ValueError("El saldo a favor del cliente ya no es suficiente para confirmar la venta.")
+        credit.balance = (credit.balance - credit_amount).quantize(Decimal("0.01"))
+        credit.save(update_fields=["balance", "updated_at", "customer_name", "customer_phone"])
+
+    @staticmethod
+    def _restore_customer_credit_if_needed(sale):
+        credit_amount = sum(
+            (payment.amount for payment in sale.payments.all() if payment.method == PaymentMethod.CUSTOMER_CREDIT),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01"))
+        if credit_amount <= 0 or not sale.customer_id:
+            return
+        credit = CustomerCredit.objects.select_for_update().filter(customer=sale.customer).first()
+        if not credit:
+            credit = CustomerCredit.objects.create(
+                customer=sale.customer,
+                customer_name=sale.customer.name,
+                customer_phone=sale.customer.phone,
+                balance=Decimal("0.00"),
+            )
+        credit.balance = (credit.balance + credit_amount).quantize(Decimal("0.01"))
+        credit.save(update_fields=["balance", "updated_at", "customer_name", "customer_phone"])
+
+    @staticmethod
+    def _mark_layaway_refunded_if_linked(sale, user):
+        layaway = Layaway.objects.select_for_update().filter(settled_sale_id=sale.id).first()
+        if not layaway or layaway.status != LayawayStatus.SETTLED:
+            return
+        layaway.status = LayawayStatus.REFUNDED
+        layaway.save(update_fields=["status", "updated_at"])
+        record_audit(
+            actor=user,
+            action="layaway.refund",
+            entity_type="layaway",
+            entity_id=layaway.id,
+            payload={"sale_id": str(sale.id)},
+        )
 
     @staticmethod
     def _resolve_role(user):

@@ -19,7 +19,7 @@ Backend API de Moto Isla con Django + DRF + PostgreSQL para operación de tienda
 - `apps/imports`: staging/parse/confirm de factura.
 - `apps/purchases`: recepciones de compra.
 - `apps/sales`: ventas POS, pagos, confirmación, anulación.
-- `apps/layaway`: apartados, liquidación, expiración, saldo a favor.
+- `apps/layaway`: clientes por teléfono, apartados multiproducto, liquidación, expiración y saldo a favor.
 - `apps/investors`: inversionistas y asignaciones.
 - `apps/ledger`: movimientos financieros de inversionista.
 - `apps/audit`: auditoría de eventos críticos.
@@ -32,6 +32,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Fase 3: imports + compras con parse/confirm y validaciones.
 - Fase 4: POS ventas con idempotencia, void window y override admin.
 - Fase 5: apartados/saldo a favor con vigencia y reglas estrictas.
+  - iteración operativa reciente: `Customer` unificado por teléfono, apartados multiproducto, múltiples abonos, extensión de vigencia y estado `REFUNDED` al anular ventas originadas desde apartado.
 - Fase 6: inversionistas + ledger (depósito/retiro/reinversión + asignaciones).
   - iteración operativa reciente: alta de inversionista sin usuario obligatorio, balances en list/detail, compra transaccional de productos y `investor_assignable_qty` en catálogo.
 - Fase 7: métricas/reportes + auditoría ampliada + módulo gastos (CRUD e integración).
@@ -53,7 +54,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Sales: `/api/v1/sales/`, `/api/v1/metrics/`
 - Reports: `/api/v1/reports/sales/`
 - Public catalog: `/api/v1/public/catalog/`, `/api/v1/public/catalog/{sku}/`
-- Layaway: `/api/v1/layaways/`, `/api/v1/customer-credits/`
+- Layaway: `/api/v1/layaways/`, `/api/v1/customers/`, `/api/v1/customer-credits/`
 - Investors: `/api/v1/investors/`, `/api/v1/investors/me/`
   - incluye `POST /api/v1/investors/{id}/purchases/` y `GET /api/v1/investors/{id}/ledger/` paginado
 - Expenses: `/api/v1/expenses/`

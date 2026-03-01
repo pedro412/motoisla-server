@@ -15,10 +15,10 @@ class PaymentInline(admin.TabularInline):
 
 @admin.register(Sale)
 class SaleAdmin(admin.ModelAdmin):
-    list_display = ("id", "cashier", "status", "subtotal", "discount_amount", "total", "confirmed_at", "created_at")
+    list_display = ("id", "cashier", "customer", "status", "subtotal", "discount_amount", "total", "confirmed_at", "created_at")
     list_filter = ("status", "cashier")
-    search_fields = ("id", "cashier__username")
-    autocomplete_fields = ("cashier",)
+    search_fields = ("id", "cashier__username", "customer__name", "customer__phone")
+    autocomplete_fields = ("cashier", "customer")
     inlines = [SaleLineInline, PaymentInline]
 
 

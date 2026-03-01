@@ -14,6 +14,7 @@ class SaleStatus(models.TextChoices):
 class PaymentMethod(models.TextChoices):
     CASH = "CASH", "Cash"
     CARD = "CARD", "Card"
+    CUSTOMER_CREDIT = "CUSTOMER_CREDIT", "Customer Credit"
 
 
 class CardType(models.TextChoices):
@@ -32,6 +33,7 @@ LEGACY_CARD_TYPE_TO_RATE = {
 class Sale(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     cashier = models.ForeignKey("accounts.User", on_delete=models.PROTECT, related_name="sales")
+    customer = models.ForeignKey("layaway.Customer", on_delete=models.PROTECT, null=True, blank=True, related_name="sales")
     status = models.CharField(max_length=16, choices=SaleStatus.choices, default=SaleStatus.DRAFT)
     subtotal = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -92,7 +94,7 @@ class CardCommissionPlan(models.Model):
 class Payment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="payments")
-    method = models.CharField(max_length=10, choices=PaymentMethod.choices)
+    method = models.CharField(max_length=20, choices=PaymentMethod.choices)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     card_type = models.CharField(max_length=12, choices=CardType.choices, null=True, blank=True)
     card_commission_plan = models.ForeignKey(

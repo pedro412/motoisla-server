@@ -51,6 +51,10 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 1. Exponer reinversión y filtros más finos de ledger para frontend.
 2. Evaluar locking explícito por producto/asignación para compras concurrentes.
 
+## Prioridad 8 — Clientes / lealtad (backlog)
+1. Diseñar programa de lealtad o descuentos basado en historial de compras del `Customer`.
+2. Definir reglas de elegibilidad y trazabilidad para promociones por recurrencia.
+
 ## Notas para agentes
 - No romper contratos actuales de API (`code/detail/fields`, paginación DRF).
 - Mantener reglas de negocio ya cerradas en fases 3-6.

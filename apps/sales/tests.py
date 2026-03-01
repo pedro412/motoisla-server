@@ -160,12 +160,17 @@ class ApiFlowTests(APITestCase):
         create = self.client.post(
             "/api/v1/layaways/",
             {
-                "product": str(self.product.id),
-                "qty": "1.00",
-                "customer_name": "Pedro",
-                "customer_phone": "555",
-                "total_price": "100.00",
-                "deposit_amount": "30.00",
+                "customer": {"name": "Pedro", "phone": "555"},
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "40.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "deposit_payments": [{"method": "CASH", "amount": "30.00"}],
                 "expires_at": (timezone.now() + timedelta(days=15)).isoformat(),
             },
             format="json",
@@ -462,6 +467,38 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         results_by_id = {row["id"]: row for row in response.data["results"]}
         self.assertTrue(results_by_id[str(sale.id)]["can_void"])
+
+    def test_sale_detail_includes_customer_summary_and_line_metadata(self):
+        self.auth_as("cashier", "cashier123")
+        sale_resp = self.client.post(
+            "/api/v1/sales/",
+            {
+                "customer_phone": "9991234567",
+                "customer_name": "Cliente QA",
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "1.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "50.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "100.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(sale_resp.status_code, 201)
+
+        detail = self.client.get(f"/api/v1/sales/{sale_resp.data['id']}/")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.data["cashier_username"], "cashier")
+        self.assertEqual(detail.data["customer_summary"]["name"], "Cliente QA")
+        self.assertEqual(detail.data["customer_summary"]["phone"], "9991234567")
+        self.assertEqual(detail.data["customer_summary"]["sales_count"], 1)
+        self.assertEqual(detail.data["customer_summary"]["confirmed_sales_count"], 0)
+        self.assertEqual(detail.data["lines"][0]["product_sku"], "SKU-001")
+        self.assertEqual(detail.data["lines"][0]["product_name"], "Casco")
 
     def test_sale_update_endpoint_is_not_allowed(self):
         self.auth_as("cashier", "cashier123")
