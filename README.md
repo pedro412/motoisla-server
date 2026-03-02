@@ -1,12 +1,13 @@
 # Moto Isla Server
 
-Backend de Moto Isla para operación de tienda: catálogo, inventario, compras, ventas POS, apartados, inversionistas/ledger, gastos y reportes.
+Backend de Moto Isla para operación de tienda: catálogo, inventario, compras, ventas POS, apartados, inversionistas/ledger, gastos recurrentes y reportes.
 
 Base técnica: **Django + DRF + JWT + PostgreSQL**, listo para correr local con Docker.
 
 ## Estado actual del backend
 - Core backend v1 prácticamente cerrado para operación local.
 - Módulos funcionales: catálogo, inventario, compras/imports, ventas, cancelación, apartados, inversionistas/ledger, gastos, auditoría, métricas y reportes.
+- `reports/sales` ya separa utilidad tienda vs participación de inversionistas y valora inventario por ownership económico.
 - Endpoint público para frontend catálogo-only disponible (`/api/v1/public/catalog/`).
 - Hardening base aplicado (settings de seguridad, checklist, runbook, colección QA, DoD).
 
@@ -123,6 +124,10 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
 - Gastos:
   - `GET/POST /api/v1/expenses/`
   - `GET/PATCH/DELETE /api/v1/expenses/{id}/`
+  - `GET /api/v1/expenses/summary/`
+  - `POST /api/v1/expenses/generate-fixed/`
+  - `GET/POST /api/v1/fixed-expense-templates/`
+  - `GET/PATCH /api/v1/fixed-expense-templates/{id}/`
 - Apartados:
   - `GET/POST /api/v1/layaways/`
   - `POST /api/v1/layaways/{id}/payments/`
@@ -164,6 +169,8 @@ Nota: al iniciar el contenedor `web`, los seeds `seed_suppliers_parsers` y `seed
 - `GET /api/v1/sales/` expone `cashier_username`, cliente ligado y `can_void` para el historial operativo.
 - `GET /api/v1/sales/{id}/` expone líneas enriquecidas (`product_name`, `product_sku`) y resumen del cliente para historial y lealtad.
 - `Layaway` ahora soporta cliente unificado por teléfono, líneas múltiples, múltiples abonos, extensión y estados `SETTLED` / `REFUNDED`.
+- `Expense` ahora soporta plantillas mensuales (`FixedExpenseTemplate`), generación idempotente y estados `PENDING` / `PAID` / `CANCELLED`.
+- `GET /api/v1/reports/sales/` ahora expone `investor_metrics` e `inventory_snapshot` con buckets de inventario propio vs inventario fondeado por inversionistas.
 
 ## Convenciones
 - Roles: `ADMIN`, `CASHIER`, `INVESTOR`.

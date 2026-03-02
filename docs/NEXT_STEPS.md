@@ -26,32 +26,37 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 - capturar baseline de performance con datos reales (latencia y query plans)
 
 ## Prioridad 3 — Módulo de gastos (v1) cerrado
-1. ✅ API CRUD de gastos.
-2. ✅ Integración en reportería gerencial base.
-3. ✅ Tests de agregación por categoría y periodo.
+1. ✅ API de gastos recurrentes y variables.
+2. ✅ Integración en reportería gerencial usando solo gastos `PAID`.
+3. ✅ Tests de agregación por categoría, periodo y generación mensual.
 
-## Prioridad 4 — Soporte frontend catalog-only
+## Prioridad 4 — Reportería financiera (siguiente iteración)
+1. Consolidar reportería exacta de consumo por asignación/venta para inversionistas (fase 2).
+2. Evaluar tabla explícita de consumos por venta para eliminar inferencias en métricas.
+3. Exponer comparativos entre periodos para utilidad tienda vs inversionistas.
+
+## Prioridad 5 — Soporte frontend catalog-only
 1. ✅ Endpoint de catálogo público readonly (`/api/v1/public/catalog/`, `/api/v1/public/catalog/{sku}/`).
 2. ✅ Rate limiting/caching básico para consulta pública.
 3. Siguiente iteración:
 - acordar contrato final con frontend web (campos/orden/filtros adicionales)
 - evaluar cache externa (Redis/CDN) para tráfico alto
 
-## Prioridad 5 — Seguimiento operativo
+## Prioridad 6 — Seguimiento operativo
 1. Validar CSRF/CORS con dominios reales en staging/prod.
 2. Capturar baseline de performance (latencia p95 + query plans) con tráfico real.
 3. Endurecer concurrencia en compras de inversionistas para evitar sobreasignación bajo requests simultáneos.
 
-## Prioridad 6 — Ventas (siguiente iteración UX/operación)
+## Prioridad 7 — Ventas (siguiente iteración UX/operación)
 1. Agregar filtros server-side para `GET /api/v1/sales/` (estatus, cajero, fecha, id).
 2. Evaluar endpoint de cobro atómico (`create + confirm`) para evitar drafts huérfanos cuando falla la confirmación.
 3. Exponer reportería de comisiones de tarjeta para utilidad operativa y conciliación.
 
-## Prioridad 7 — Inversionistas (siguiente iteración operativa)
+## Prioridad 8 — Inversionistas (siguiente iteración operativa)
 1. Exponer reinversión y filtros más finos de ledger para frontend.
 2. Evaluar locking explícito por producto/asignación para compras concurrentes.
 
-## Prioridad 8 — Clientes / lealtad (backlog)
+## Prioridad 9 — Clientes / lealtad (backlog)
 1. Diseñar programa de lealtad o descuentos basado en historial de compras del `Customer`.
 2. Definir reglas de elegibilidad y trazabilidad para promociones por recurrencia.
 

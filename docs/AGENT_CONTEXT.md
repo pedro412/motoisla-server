@@ -23,7 +23,7 @@ Backend API de Moto Isla con Django + DRF + PostgreSQL para operación de tienda
 - `apps/investors`: inversionistas y asignaciones.
 - `apps/ledger`: movimientos financieros de inversionista.
 - `apps/audit`: auditoría de eventos críticos.
-- `apps/expenses`: gastos (base).
+- `apps/expenses`: gastos mensuales, plantillas fijas y resumen operativo.
 
 ## 4. Estado funcional (resumen)
 Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
@@ -35,7 +35,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
   - iteración operativa reciente: `Customer` unificado por teléfono, apartados multiproducto, múltiples abonos, extensión de vigencia y estado `REFUNDED` al anular ventas originadas desde apartado.
 - Fase 6: inversionistas + ledger (depósito/retiro/reinversión + asignaciones).
   - iteración operativa reciente: alta de inversionista sin usuario obligatorio, balances en list/detail, compra transaccional de productos y `investor_assignable_qty` en catálogo.
-- Fase 7: métricas/reportes + auditoría ampliada + módulo gastos (CRUD e integración).
+- Fase 7: métricas/reportes + auditoría ampliada + módulo gastos recurrentes (plantillas, generación y resumen).
 - Fase 8: hardening base (security/performance/docs operativas).
 
 ## 5. Convenciones importantes
@@ -58,6 +58,7 @@ Implementado y funcional hasta Fase 8 (scope backend) del plan por capas:
 - Investors: `/api/v1/investors/`, `/api/v1/investors/me/`
   - incluye `POST /api/v1/investors/{id}/purchases/` y `GET /api/v1/investors/{id}/ledger/` paginado
 - Expenses: `/api/v1/expenses/`
+  - incluye `/api/v1/expenses/summary/`, `/api/v1/expenses/generate-fixed/` y `/api/v1/fixed-expense-templates/`
 
 ## 7. Comandos de trabajo
 - `make up`
@@ -76,7 +77,7 @@ Registrado:
   - colección API QA disponible
   - runbook y DoD v1 documentados
   - índices y optimizaciones de query en módulos críticos
-- Reportería financiera avanzada aún iterativa (más cortes/márgenes ejecutivos).
+- Reportería financiera ya separa utilidad tienda vs participación de inversionistas, pero sigue iterativa para cortes más finos.
 - Seguimiento operativo pendiente fuera de desarrollo backend:
   - validar CSRF/CORS con dominios reales en staging/prod
   - capturar baseline de performance p95 con tráfico real

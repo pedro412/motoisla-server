@@ -9,13 +9,14 @@ from rest_framework.test import APITestCase
 
 from apps.audit.models import AuditLog
 from apps.catalog.models import Brand, Product, ProductType
-from apps.expenses.models import Expense
+from apps.expenses.models import Expense, ExpenseStatus
 from apps.inventory.models import InventoryMovement
 from apps.imports.models import InvoiceImportLine
 from apps.investors.models import Investor, InvestorAssignment
 from apps.ledger.models import LedgerEntry
 from apps.ledger.services import current_balances
 from apps.layaway.models import CustomerCredit, Layaway
+from apps.purchases.models import PurchaseReceipt, ReceiptStatus
 from apps.sales.models import CardCommissionPlan, CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus, VoidEvent
 from apps.suppliers.models import Supplier, SupplierInvoiceParser
 
@@ -592,7 +593,14 @@ class ApiFlowTests(APITestCase):
 
     def test_metrics_supports_date_range_top_products_and_payment_breakdown(self):
         self.auth_as("admin", "admin123")
-        product_2 = Product.objects.create(sku="SKU-002", name="Guantes", default_price=Decimal("150.00"))
+        self.product.cost_price = Decimal("40.00")
+        self.product.save(update_fields=["cost_price"])
+        product_2 = Product.objects.create(
+            sku="SKU-002",
+            name="Guantes",
+            default_price=Decimal("150.00"),
+            cost_price=Decimal("80.00"),
+        )
 
         today = timezone.now()
         in_range_day = today - timedelta(days=2)
@@ -662,6 +670,27 @@ class ApiFlowTests(APITestCase):
             card_type=CardType.MSI_3,
         )
 
+        PurchaseReceipt.objects.create(
+            supplier=Supplier.objects.create(code="REP", name="Report Supplier"),
+            invoice_number="REP-001",
+            status=ReceiptStatus.POSTED,
+            subtotal=Decimal("250.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("250.00"),
+            created_by=self.admin,
+            posted_at=in_range_day,
+        )
+        PurchaseReceipt.objects.create(
+            supplier=Supplier.objects.create(code="OLD", name="Old Supplier"),
+            invoice_number="OLD-001",
+            status=ReceiptStatus.POSTED,
+            subtotal=Decimal("999.00"),
+            tax=Decimal("0.00"),
+            total=Decimal("999.00"),
+            created_by=self.admin,
+            posted_at=out_of_range_day,
+        )
+
         Sale.objects.create(
             cashier=self.cashier,
             status=SaleStatus.DRAFT,
@@ -682,6 +711,9 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(response.data["sales_count"], 2)
         self.assertEqual(Decimal(str(response.data["total_sales"])), Decimal("295.00"))
         self.assertEqual(Decimal(str(response.data["avg_ticket"])), Decimal("147.5"))
+        self.assertEqual(Decimal(str(response.data["gross_profit"])), Decimal("175.00"))
+        self.assertEqual(Decimal(str(response.data["purchase_spend"])), Decimal("250.00"))
+        self.assertEqual(response.data["purchase_count"], 1)
 
         top_products = response.data["top_products"]
         self.assertEqual(len(top_products), 1)
@@ -698,6 +730,13 @@ class ApiFlowTests(APITestCase):
         card_types = {row["card_type"]: row for row in response.data["payment_breakdown"]["card_types"]}
         self.assertIn("NORMAL", card_types)
         self.assertEqual(Decimal(str(card_types["NORMAL"]["total_amount"])), Decimal("95.00"))
+
+        inventory_snapshot = response.data["inventory_snapshot"]
+        self.assertEqual(Decimal(str(inventory_snapshot["cost_value"])), Decimal("400.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["retail_value"])), Decimal("1000.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["potential_profit"])), Decimal("600.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["total_units"])), Decimal("10.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["gross_margin_pct"])), Decimal("60.00"))
 
     def test_sales_report_includes_daily_and_cashier_breakdown(self):
         self.auth_as("admin", "admin123")
@@ -742,13 +781,23 @@ class ApiFlowTests(APITestCase):
     def test_sales_report_includes_expenses_summary(self):
         self.auth_as("admin", "admin123")
         now = timezone.now()
-        Sale.objects.create(
+        self.product.cost_price = Decimal("40.00")
+        self.product.save(update_fields=["cost_price"])
+        sale = Sale.objects.create(
             cashier=self.cashier,
             status=SaleStatus.CONFIRMED,
             subtotal=Decimal("300.00"),
             discount_amount=Decimal("0.00"),
             total=Decimal("300.00"),
             confirmed_at=now,
+        )
+        SaleLine.objects.create(
+            sale=sale,
+            product=self.product,
+            qty=Decimal("3.00"),
+            unit_price=Decimal("100.00"),
+            unit_cost=Decimal("40.00"),
+            discount_pct=Decimal("0.00"),
         )
         Expense.objects.create(
             category="Rent",
@@ -771,6 +820,22 @@ class ApiFlowTests(APITestCase):
             expense_date=(now - timedelta(days=45)).date(),
             created_by=self.admin,
         )
+        Expense.objects.create(
+            category="Payroll",
+            description="Pending payroll",
+            amount=Decimal("400.00"),
+            expense_date=now.date(),
+            status=ExpenseStatus.PENDING,
+            created_by=self.admin,
+        )
+        Expense.objects.create(
+            category="Misc",
+            description="Cancelled misc",
+            amount=Decimal("70.00"),
+            expense_date=now.date(),
+            status=ExpenseStatus.CANCELLED,
+            created_by=self.admin,
+        )
 
         response = self.client.get(
             "/api/v1/reports/sales/",
@@ -787,6 +852,104 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(Decimal(str(by_category["Rent"]["total_amount"])), Decimal("120.00"))
         self.assertEqual(Decimal(str(by_category["Utilities"]["total_amount"])), Decimal("30.00"))
         self.assertEqual(Decimal(str(response.data["net_sales_after_expenses"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(response.data["gross_profit"])), Decimal("180.00"))
+        self.assertEqual(Decimal(str(response.data["net_profit"])), Decimal("30.00"))
+
+    def test_sales_report_separates_store_and_investor_metrics(self):
+        self.auth_as("cashier", "cashier123")
+        self.product.cost_price = Decimal("40.00")
+        self.product.save(update_fields=["cost_price"])
+        own_product = Product.objects.create(
+            sku="SKU-OWN",
+            name="Guantes propios",
+            default_price=Decimal("80.00"),
+            cost_price=Decimal("30.00"),
+        )
+        InventoryMovement.objects.create(
+            product=own_product,
+            movement_type="INBOUND",
+            quantity_delta=Decimal("5"),
+            reference_type="seed",
+            reference_id="seed-own-stock",
+            note="seed own",
+            created_by=self.admin,
+        )
+
+        assignment = InvestorAssignment.objects.create(
+            investor=self.investor,
+            product=self.product,
+            qty_assigned=Decimal("4.00"),
+            unit_cost=Decimal("40.00"),
+        )
+
+        investor_sale = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "2.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "40.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "200.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(investor_sale.status_code, 201)
+        self.client.post(f"/api/v1/sales/{investor_sale.data['id']}/confirm/", {}, format="json")
+
+        own_sale = self.client.post(
+            "/api/v1/sales/",
+            {
+                "lines": [
+                    {
+                        "product": str(own_product.id),
+                        "qty": "1.00",
+                        "unit_price": "80.00",
+                        "unit_cost": "30.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "80.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(own_sale.status_code, 201)
+        self.client.post(f"/api/v1/sales/{own_sale.data['id']}/confirm/", {}, format="json")
+
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("2.00"))
+
+        self.auth_as("admin", "admin123")
+        response = self.client.get(
+            "/api/v1/reports/sales/",
+            {
+                "date_from": (timezone.now() - timedelta(days=1)).date().isoformat(),
+                "date_to": timezone.now().date().isoformat(),
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+
+        investor_metrics = response.data["investor_metrics"]
+        self.assertEqual(Decimal(str(response.data["gross_profit"])), Decimal("170.00"))
+        self.assertEqual(Decimal(str(investor_metrics["investor_profit_share_total"])), Decimal("60.00"))
+        self.assertEqual(Decimal(str(investor_metrics["store_profit_share_total"])), Decimal("110.00"))
+        self.assertEqual(Decimal(str(investor_metrics["investor_backed_sales_total"])), Decimal("200.00"))
+        self.assertEqual(Decimal(str(investor_metrics["store_owned_sales_total"])), Decimal("80.00"))
+        self.assertEqual(Decimal(str(investor_metrics["inventory_cost_assigned_to_investors"])), Decimal("160.00"))
+        self.assertEqual(Decimal(str(investor_metrics["store_net_inventory_exposure_change"])), Decimal("-160.00"))
+        self.assertEqual(Decimal(str(response.data["net_profit"])), Decimal("110.00"))
+
+        inventory_snapshot = response.data["inventory_snapshot"]
+        self.assertEqual(Decimal(str(inventory_snapshot["total_units"])), Decimal("12.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["store_owned_units"])), Decimal("10.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["investor_assigned_units"])), Decimal("2.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["store_owned_cost_value"])), Decimal("360.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["investor_assigned_cost_value"])), Decimal("80.00"))
+        self.assertEqual(Decimal(str(inventory_snapshot["cost_value"])), Decimal("440.00"))
 
     def test_investor_sale_confirm_and_void_revert_stock_assignment_and_ledger(self):
         self.auth_as("cashier", "cashier123")

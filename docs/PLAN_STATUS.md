@@ -89,13 +89,19 @@ Completado:
   - `investor.assignment.create|update|delete`
 - Tests agregados para métricas/reportes y auditoría de catálogo/inventario.
 - Módulo de gastos v1 completado:
-  - CRUD `/api/v1/expenses/` (admin)
-  - filtros por rango/categoría
+  - `Expense` evoluciona a `FIXED` / `VARIABLE` con estados `PENDING` / `PAID` / `CANCELLED`
+  - plantillas recurrentes `FixedExpenseTemplate`
+  - `POST /api/v1/expenses/generate-fixed/` idempotente por mes
+  - `GET /api/v1/expenses/summary/` para dashboard mensual
   - auditoría `expenses.create|update|delete`
-  - índices y constraint de monto positivo
+  - índices y constraints de monto positivo / unicidad lógica por plantilla+mes
 - Reporte de ventas integrado con gastos:
-  - `expenses_summary` (total + conteo + por categoría)
+  - `expenses_summary` (solo gastos `PAID`, total + conteo + por categoría)
   - `net_sales_after_expenses`
+- Reportería financiera iterada para inversionistas:
+  - `investor_metrics` con utilidad de inversionista vs utilidad real de tienda
+  - `inventory_snapshot` con inventario propio vs inventario fondeado por inversionistas
+  - `net_profit` redefine utilidad neta real de tienda (después de reparto y gastos pagados)
 - Tests de gastos y reporte con integración de gastos.
 Seguimiento funcional (iterativo):
 - ampliar reportería financiera avanzada según operación real (márgenes detallados, cortes ejecutivos adicionales).
@@ -131,7 +137,7 @@ Seguimiento operativo (no bloqueante del cierre backend):
 - Ventas POS: ✅
 - Apartados/Saldo: ✅
 - Inversionistas/Ledger: ✅
-- Gastos: ✅ CRUD + reportería base
-- Métricas/reportes: 🟡 Parcial
+- Gastos: ✅ Recurrentes + reportería mensual
+- Métricas/reportes: ✅ Operativas, con reportería financiera avanzada aún iterativa
 - Usuarios/Roles/Accesos: ✅
 - Catálogo web (solo visualización): ✅ Backend listo (endpoint público readonly)
