@@ -236,6 +236,48 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("payments", response.data["fields"])
 
+    def test_profitability_preview_endpoint_returns_breakdown(self):
+        self.auth_as("cashier", "cashier123")
+        assignment = InvestorAssignment.objects.create(
+            investor=self.investor,
+            product=self.product,
+            qty_assigned=Decimal("2.00"),
+            unit_cost=Decimal("40.00"),
+        )
+
+        response = self.client.post(
+            "/api/v1/sales/preview-profitability/",
+            {
+                "lines": [
+                    {
+                        "product": str(self.product.id),
+                        "qty": "2.00",
+                        "unit_price": "100.00",
+                        "unit_cost": "40.00",
+                        "discount_pct": "0.00",
+                    }
+                ],
+                "payments": [{"method": "CASH", "amount": "200.00"}],
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("operating_cost_rate_snapshot", response.data)
+        self.assertIn("operating_cost_rate_source", response.data)
+        self.assertIn("lines", response.data)
+        self.assertEqual(len(response.data["lines"]), 1)
+        self.assertEqual(response.data["lines"][0]["ownership"], "INVESTOR")
+        self.assertEqual(response.data["lines"][0]["investor_id"], str(assignment.investor_id))
+        self.assertEqual(Decimal(str(response.data["investor_profit_total"])), Decimal("42.50"))
+
+    def test_operating_cost_rate_endpoint_returns_snapshot(self):
+        self.auth_as("cashier", "cashier123")
+        response = self.client.get("/api/v1/profitability/operating-cost-rate/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("operating_cost_rate", response.data)
+        self.assertIn("rate_source", response.data)
+        self.assertIn("calculated_at", response.data)
+
     def test_sale_rejects_card_payment_without_card_type(self):
         self.auth_as("cashier", "cashier123")
         response = self.client.post(
@@ -935,13 +977,13 @@ class ApiFlowTests(APITestCase):
 
         investor_metrics = response.data["investor_metrics"]
         self.assertEqual(Decimal(str(response.data["gross_profit"])), Decimal("170.00"))
-        self.assertEqual(Decimal(str(investor_metrics["investor_profit_share_total"])), Decimal("60.00"))
-        self.assertEqual(Decimal(str(investor_metrics["store_profit_share_total"])), Decimal("110.00"))
+        self.assertEqual(Decimal(str(investor_metrics["investor_profit_share_total"])), Decimal("42.50"))
+        self.assertEqual(Decimal(str(investor_metrics["store_profit_share_total"])), Decimal("78.50"))
         self.assertEqual(Decimal(str(investor_metrics["investor_backed_sales_total"])), Decimal("200.00"))
         self.assertEqual(Decimal(str(investor_metrics["store_owned_sales_total"])), Decimal("80.00"))
         self.assertEqual(Decimal(str(investor_metrics["inventory_cost_assigned_to_investors"])), Decimal("160.00"))
         self.assertEqual(Decimal(str(investor_metrics["store_net_inventory_exposure_change"])), Decimal("-160.00"))
-        self.assertEqual(Decimal(str(response.data["net_profit"])), Decimal("110.00"))
+        self.assertEqual(Decimal(str(response.data["net_profit"])), Decimal("78.50"))
 
         inventory_snapshot = response.data["inventory_snapshot"]
         self.assertEqual(Decimal(str(inventory_snapshot["total_units"])), Decimal("12.00"))
@@ -988,7 +1030,7 @@ class ApiFlowTests(APITestCase):
         balances_after_confirm = current_balances(self.investor)
         self.assertEqual(Decimal(str(balances_after_confirm["capital"])), Decimal("80.00"))
         self.assertEqual(Decimal(str(balances_after_confirm["inventory"])), Decimal("-80.00"))
-        self.assertEqual(Decimal(str(balances_after_confirm["profit"])), Decimal("60.00"))
+        self.assertEqual(Decimal(str(balances_after_confirm["profit"])), Decimal("42.50"))
 
         void = self.client.post(f"/api/v1/sales/{sale_id}/void/", {"reason": "test-reverse"}, format="json")
         self.assertEqual(void.status_code, 200)

@@ -11,8 +11,6 @@ from apps.accounts.models import UserRole
 from apps.audit.services import record_audit
 from apps.common.permissions import RolePermission
 from apps.inventory.models import InventoryMovement, MovementType
-from apps.investors.models import InvestorAssignment
-from apps.ledger.models import LedgerEntry, LedgerEntryType
 from apps.layaway.models import (
     Customer,
     CustomerCredit,
@@ -32,6 +30,7 @@ from apps.layaway.serializers import (
     LayawaySerializer,
 )
 from apps.sales.models import Payment, PaymentMethod, Sale, SaleLine, SaleStatus
+from apps.sales.profitability import apply_sale_profitability
 
 
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -429,8 +428,7 @@ class LayawayViewSet(viewsets.ModelViewSet):
                 card_plan_label=payment.card_plan_label,
                 installments_months=payment.installments_months,
             )
-        for line in sale.lines.all():
-            LayawayViewSet._apply_investor_ledger_for_line(sale, line)
+        apply_sale_profitability(sale=sale)
 
         record_audit(
             actor=user,
@@ -440,63 +438,6 @@ class LayawayViewSet(viewsets.ModelViewSet):
             payload={"total": str(sale.total), "source": "layaway"},
         )
         return sale
-
-    @staticmethod
-    def _sale_commission_total(sale):
-        commission_total = Decimal("0")
-        for payment in sale.payments.all():
-            if payment.method != PaymentMethod.CARD:
-                continue
-            commission_rate = payment.commission_rate or Decimal("0")
-            commission_total += payment.amount * commission_rate
-        return commission_total
-
-    @staticmethod
-    def _apply_investor_ledger_for_line(sale, line):
-        remaining_qty = line.qty
-        assignments = InvestorAssignment.objects.filter(product=line.product, qty_assigned__gt=0).order_by("created_at")
-
-        gross_line_revenue = line.qty * line.unit_price
-        line_discount = gross_line_revenue * line.discount_pct / Decimal("100")
-        net_revenue = gross_line_revenue - line_discount
-        commission_total = LayawayViewSet._sale_commission_total(sale)
-
-        for assignment in assignments:
-            available = assignment.qty_assigned - assignment.qty_sold
-            if available <= 0 or remaining_qty <= 0:
-                continue
-
-            consumed = min(available, remaining_qty)
-            assignment.qty_sold += consumed
-            assignment.save(update_fields=["qty_sold"])
-            remaining_qty -= consumed
-
-            proportional_revenue = net_revenue * (consumed / line.qty)
-            proportional_cost = assignment.unit_cost * consumed
-            proportional_commission = commission_total * (consumed / line.qty)
-            net_profit = proportional_revenue - proportional_cost - proportional_commission
-            investor_profit_share = net_profit / Decimal("2")
-
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.INVENTORY_TO_CAPITAL,
-                capital_delta=proportional_cost,
-                inventory_delta=-proportional_cost,
-                profit_delta=Decimal("0"),
-                reference_type="sale",
-                reference_id=str(sale.id),
-                note="Capital recovery",
-            )
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.PROFIT_SHARE,
-                capital_delta=Decimal("0"),
-                inventory_delta=Decimal("0"),
-                profit_delta=investor_profit_share,
-                reference_type="sale",
-                reference_id=str(sale.id),
-                note="Profit share 50/50",
-            )
 
 
 class CustomerCreditViewSet(viewsets.ReadOnlyModelViewSet):

@@ -70,6 +70,61 @@ class SaleLine(models.Model):
             raise ValidationError("discount_pct must be between 0 and 100")
 
 
+class ProfitabilityRateSource(models.TextChoices):
+    MTD_REAL = "MTD_REAL", "MTD real"
+    FALLBACK_BASE = "FALLBACK_BASE", "Fallback base"
+
+
+class SaleProfitabilitySnapshot(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    sale = models.OneToOneField(Sale, on_delete=models.CASCADE, related_name="profitability_snapshot")
+    operating_cost_rate_snapshot = models.DecimalField(max_digits=6, decimal_places=4)
+    operating_cost_rate_source = models.CharField(max_length=24, choices=ProfitabilityRateSource.choices)
+    operating_cost_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    commission_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    gross_profit_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    net_profit_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    investor_profit_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    store_profit_total = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    calc_version = models.CharField(max_length=16, default="v1")
+    calculated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["operating_cost_rate_source", "calculated_at"], name="saleprof_rate_source_idx"),
+            models.Index(fields=["calculated_at"], name="saleprof_calc_at_idx"),
+        ]
+
+
+class SaleLineProfitability(models.Model):
+    class Ownership(models.TextChoices):
+        STORE = "STORE", "Store"
+        INVESTOR = "INVESTOR", "Investor"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    snapshot = models.ForeignKey(SaleProfitabilitySnapshot, on_delete=models.CASCADE, related_name="lines")
+    sale_line = models.ForeignKey(SaleLine, on_delete=models.CASCADE, related_name="profitability_lines")
+    product = models.ForeignKey("catalog.Product", on_delete=models.PROTECT)
+    assignment = models.ForeignKey("investors.InvestorAssignment", on_delete=models.SET_NULL, null=True, blank=True)
+    investor = models.ForeignKey("investors.Investor", on_delete=models.SET_NULL, null=True, blank=True)
+    ownership = models.CharField(max_length=16, choices=Ownership.choices)
+    qty_consumed = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_revenue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_cogs = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_operating_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_commission_cost = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    line_net_profit = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    investor_profit_share = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    store_profit_share = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["snapshot", "ownership"], name="salelineprof_snapshot_own_idx"),
+            models.Index(fields=["investor", "ownership"], name="salelineprof_investor_own_idx"),
+            models.Index(fields=["sale_line"], name="salelineprof_sale_line_idx"),
+        ]
+
+
 class CardCommissionPlan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=32, unique=True)
