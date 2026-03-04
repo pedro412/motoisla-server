@@ -14,7 +14,10 @@ from apps.sales.models import (
     CardType,
     Payment,
     PaymentMethod,
+    ProfitabilityRateSource,
     Sale,
+    SaleLineProfitability,
+    SaleProfitabilitySnapshot,
     SaleLine,
     SaleStatus,
 )
@@ -78,6 +81,46 @@ class CardCommissionPlanSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class SaleLineProfitabilitySerializer(serializers.ModelSerializer):
+    product = serializers.UUIDField(source="product_id", read_only=True)
+    investor_id = serializers.UUIDField(read_only=True, allow_null=True)
+
+    class Meta:
+        model = SaleLineProfitability
+        fields = [
+            "product",
+            "line_revenue",
+            "line_cogs",
+            "line_operating_cost",
+            "line_commission_cost",
+            "line_net_profit",
+            "ownership",
+            "investor_id",
+            "investor_profit_share",
+            "store_profit_share",
+        ]
+        read_only_fields = fields
+
+
+class SaleProfitabilitySnapshotSerializer(serializers.ModelSerializer):
+    lines = SaleLineProfitabilitySerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SaleProfitabilitySnapshot
+        fields = [
+            "operating_cost_rate_snapshot",
+            "operating_cost_rate_source",
+            "operating_cost_amount",
+            "commission_amount",
+            "gross_profit_total",
+            "net_profit_total",
+            "investor_profit_total",
+            "store_profit_total",
+            "lines",
+        ]
+        read_only_fields = fields
+
+
 class SaleSerializer(serializers.ModelSerializer):
     lines = SaleLineSerializer(many=True)
     payments = PaymentSerializer(many=True)
@@ -88,6 +131,7 @@ class SaleSerializer(serializers.ModelSerializer):
     override_admin_username = serializers.CharField(write_only=True, required=False, allow_blank=False)
     override_admin_password = serializers.CharField(write_only=True, required=False, allow_blank=False)
     override_reason = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    profitability_breakdown = SaleProfitabilitySnapshotSerializer(source="profitability_snapshot", read_only=True)
 
     class Meta:
         model = Sale
@@ -110,6 +154,7 @@ class SaleSerializer(serializers.ModelSerializer):
             "override_admin_username",
             "override_admin_password",
             "override_reason",
+            "profitability_breakdown",
         ]
         read_only_fields = [
             "id",
@@ -123,6 +168,7 @@ class SaleSerializer(serializers.ModelSerializer):
             "voided_at",
             "created_at",
             "customer_summary",
+            "profitability_breakdown",
         ]
 
     @staticmethod
@@ -386,3 +432,123 @@ class SaleListSerializer(serializers.ModelSerializer):
 
         deadline = obj.confirmed_at + timedelta(minutes=VOID_WINDOW_MINUTES)
         return timezone.now() <= deadline
+
+
+class SaleProfitabilityPreviewLineSerializer(serializers.Serializer):
+    product = serializers.UUIDField()
+    qty = serializers.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
+    unit_cost = serializers.DecimalField(max_digits=12, decimal_places=2)
+    discount_pct = serializers.DecimalField(max_digits=5, decimal_places=2)
+
+
+class SaleProfitabilityPreviewPaymentSerializer(serializers.Serializer):
+    method = serializers.ChoiceField(choices=PaymentMethod.choices)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    card_plan_id = serializers.PrimaryKeyRelatedField(
+        source="card_commission_plan",
+        queryset=CardCommissionPlan.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+    card_type = serializers.ChoiceField(choices=CardType.choices, required=False, allow_null=True)
+
+
+class SaleProfitabilityPreviewSerializer(serializers.Serializer):
+    lines = SaleProfitabilityPreviewLineSerializer(many=True)
+    payments = SaleProfitabilityPreviewPaymentSerializer(many=True)
+
+    @staticmethod
+    def _legacy_card_type_for_plan(plan):
+        if plan.installments_months == 0:
+            return CardType.NORMAL
+        if plan.installments_months == 3:
+            return CardType.MSI_3
+        return None
+
+    @staticmethod
+    def _plan_from_legacy_card_type(card_type):
+        if card_type == CardType.NORMAL:
+            return CardCommissionPlan.objects.filter(code=CardType.NORMAL, is_active=True).first()
+        if card_type == CardType.MSI_3:
+            return CardCommissionPlan.objects.filter(code=CardType.MSI_3, is_active=True).first()
+        return None
+
+    def validate(self, attrs):
+        lines = attrs.get("lines", [])
+        payments = attrs.get("payments", [])
+        if not lines:
+            raise serializers.ValidationError({"lines": "Debes incluir al menos una linea."})
+        if not payments:
+            raise serializers.ValidationError({"payments": "Debes incluir al menos un pago."})
+
+        from apps.catalog.models import Product
+
+        products_by_id = {
+            str(product.id): product
+            for product in Product.objects.filter(id__in=[line["product"] for line in lines])
+        }
+        if len(products_by_id) != len(lines):
+            raise serializers.ValidationError({"lines": "Uno o mas productos no existen."})
+
+        subtotal = Decimal("0.00")
+        discount_total = Decimal("0.00")
+        validated_lines = []
+        for line in lines:
+            if line["qty"] <= 0:
+                raise serializers.ValidationError({"lines": "La cantidad debe ser mayor a 0."})
+            if line["unit_price"] < 0 or line["unit_cost"] < 0:
+                raise serializers.ValidationError({"lines": "Precios y costos deben ser mayores o iguales a 0."})
+            if line["discount_pct"] < 0 or line["discount_pct"] > 100:
+                raise serializers.ValidationError({"lines": "discount_pct debe estar entre 0 y 100."})
+            line_amount = line["qty"] * line["unit_price"]
+            line_discount = line_amount * line["discount_pct"] / Decimal("100")
+            subtotal += line_amount
+            discount_total += line_discount
+            line["sale_line"] = SaleLine(
+                product=products_by_id[str(line["product"])],
+                qty=line["qty"],
+                unit_price=line["unit_price"],
+                unit_cost=line["unit_cost"],
+                discount_pct=line["discount_pct"],
+            )
+            validated_lines.append(line)
+
+        total = (subtotal - discount_total).quantize(Decimal("0.01"))
+        payments_sum = Decimal("0.00")
+        for payment in payments:
+            if payment["amount"] <= 0:
+                raise serializers.ValidationError({"payments": "El monto de pago debe ser mayor a 0."})
+            if payment["method"] == PaymentMethod.CARD:
+                resolved_plan = payment.get("card_commission_plan")
+                if not resolved_plan:
+                    if not payment.get("card_type"):
+                        raise serializers.ValidationError({"payments": "Tarjeta requiere card_plan_id o card_type."})
+                    resolved_plan = self._plan_from_legacy_card_type(payment["card_type"])
+                    if not resolved_plan:
+                        raise serializers.ValidationError({"payments": "No existe plan activo para el tipo de tarjeta."})
+                legacy_card_type = self._legacy_card_type_for_plan(resolved_plan)
+                if payment.get("card_type") and legacy_card_type and payment["card_type"] != legacy_card_type:
+                    raise serializers.ValidationError({"payments": "card_type no coincide con el plan seleccionado."})
+                payment["card_commission_plan"] = resolved_plan
+                payment["commission_rate"] = resolved_plan.commission_rate
+                payment["card_type"] = legacy_card_type
+            else:
+                payment["commission_rate"] = None
+                payment["card_type"] = None
+                payment["card_commission_plan"] = None
+            payments_sum += payment["amount"]
+
+        payments_sum = payments_sum.quantize(Decimal("0.01"))
+        if payments_sum != total:
+            raise serializers.ValidationError({"payments": "La suma de pagos debe coincidir con el total."})
+
+        attrs["lines"] = validated_lines
+        attrs["payments"] = payments
+        return attrs
+
+
+class OperatingCostRateSerializer(serializers.Serializer):
+    operating_cost_rate = serializers.DecimalField(max_digits=6, decimal_places=4)
+    rate_source = serializers.ChoiceField(choices=ProfitabilityRateSource.choices)
+    calculated_at = serializers.DateTimeField()

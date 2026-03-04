@@ -2,6 +2,7 @@ from collections import defaultdict
 from decimal import Decimal
 
 from django.db.models import Avg, Count, DecimalField, ExpressionWrapper, F, Sum, Value
+from django.db.models import Q
 from django.db.models.functions import Coalesce, Greatest
 from rest_framework import generics
 from rest_framework import serializers
@@ -14,7 +15,7 @@ from apps.expenses.models import Expense, ExpenseStatus
 from apps.investors.models import InvestorAssignment
 from apps.ledger.models import LedgerEntry, LedgerEntryType
 from apps.purchases.models import PurchaseReceipt, ReceiptStatus
-from apps.sales.models import Payment, PaymentMethod, Sale, SaleLine, SaleStatus
+from apps.sales.models import Payment, PaymentMethod, Sale, SaleLine, SaleProfitabilitySnapshot, SaleStatus
 
 
 class SalesMetricsQuerySerializer(serializers.Serializer):
@@ -233,6 +234,35 @@ class SalesMetricsMixin:
             )["total"]
         )
 
+    @staticmethod
+    def _profitability_summary_for(confirmed_sales):
+        snapshots = SaleProfitabilitySnapshot.objects.filter(sale__in=confirmed_sales)
+        summary = snapshots.aggregate(
+            operating_cost_total_allocated=Coalesce(
+                Sum("operating_cost_amount"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=16, decimal_places=2),
+            ),
+            operating_cost_rate_avg=Coalesce(
+                Avg("operating_cost_rate_snapshot"),
+                Value(Decimal("0.0000")),
+                output_field=DecimalField(max_digits=6, decimal_places=4),
+            ),
+            fallback_usage_count=Count("id", filter=Q(operating_cost_rate_source="FALLBACK_BASE")),
+            investor_profit_total=Coalesce(
+                Sum("investor_profit_total"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=16, decimal_places=2),
+            ),
+            store_profit_total=Coalesce(
+                Sum("store_profit_total"),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(max_digits=16, decimal_places=2),
+            ),
+        )
+        summary["snapshots_count"] = snapshots.count()
+        return summary
+
     @classmethod
     def _investor_sales_split(cls, *, date_to, confirmed_sales):
         replay_sales = Sale.objects.filter(status=SaleStatus.CONFIRMED)
@@ -399,7 +429,8 @@ class SalesMetricsMixin:
         purchases = self._purchase_receipts_queryset(date_from, date_to)
         purchase_summary = self._purchase_summary(purchases)
         gross_profit_total = self._gross_profit_for(confirmed_sales)
-        investor_profit_share_total = self._investor_profit_share_total(confirmed_sales)
+        investor_profit_share_total_legacy = self._investor_profit_share_total(confirmed_sales)
+        profitability_summary = self._profitability_summary_for(confirmed_sales)
         sales_split = self._investor_sales_split(date_to=date_to, confirmed_sales=confirmed_sales)
         investor_assignment_summary = self._assignments_queryset(date_from=date_from, date_to=date_to).aggregate(
             inventory_cost_assigned_to_investors=Coalesce(
@@ -413,9 +444,17 @@ class SalesMetricsMixin:
                 output_field=DecimalField(max_digits=16, decimal_places=2),
             ),
         )
-        store_profit_share_total = (
-            Decimal(str(gross_profit_total)) - Decimal(str(investor_profit_share_total))
-        ).quantize(Decimal("0.01"))
+        snapshots_count = int(profitability_summary["snapshots_count"] or 0)
+        sales_count = int(confirmed_sales.count())
+        all_sales_have_snapshot = sales_count > 0 and snapshots_count == sales_count
+        if all_sales_have_snapshot:
+            investor_profit_share_total = Decimal(str(profitability_summary["investor_profit_total"])).quantize(Decimal("0.01"))
+            store_profit_share_total = Decimal(str(profitability_summary["store_profit_total"])).quantize(Decimal("0.01"))
+        else:
+            investor_profit_share_total = Decimal(str(investor_profit_share_total_legacy)).quantize(Decimal("0.01"))
+            store_profit_share_total = (
+                Decimal(str(gross_profit_total)) - Decimal(str(investor_profit_share_total_legacy))
+            ).quantize(Decimal("0.01"))
         store_net_inventory_exposure_change = (
             Decimal(str(purchase_summary["purchase_spend"]))
             - Decimal(str(investor_assignment_summary["inventory_cost_assigned_to_investors"]))
@@ -437,6 +476,11 @@ class SalesMetricsMixin:
             "range": {"date_from": date_from, "date_to": date_to},
             "top_products": self._top_products_for(confirmed_sales, params["top_limit"]),
             "payment_breakdown": self._payment_breakdown_for(confirmed_sales),
+            "profitability_metrics": {
+                "operating_cost_rate_avg": profitability_summary["operating_cost_rate_avg"],
+                "operating_cost_total_allocated": profitability_summary["operating_cost_total_allocated"],
+                "fallback_usage_count": profitability_summary["fallback_usage_count"] if all_sales_have_snapshot else 0,
+            },
         }, confirmed_sales, store_profit_share_total
 
 

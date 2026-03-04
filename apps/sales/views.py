@@ -1,5 +1,4 @@
 from datetime import timedelta
-from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -11,11 +10,22 @@ from apps.accounts.models import UserRole
 from apps.audit.services import record_audit
 from apps.common.permissions import RolePermission
 from apps.inventory.models import InventoryMovement, MovementType
-from apps.investors.models import InvestorAssignment
 from apps.layaway.models import CustomerCredit, Layaway, LayawayStatus
-from apps.ledger.models import LedgerEntry, LedgerEntryType
-from apps.sales.models import LEGACY_CARD_TYPE_TO_RATE, CardCommissionPlan, PaymentMethod, Sale, SaleStatus, VoidEvent
-from apps.sales.serializers import CardCommissionPlanSerializer, SaleListSerializer, SaleSerializer, VOID_WINDOW_MINUTES
+from apps.sales.models import CardCommissionPlan, PaymentMethod, Sale, SaleStatus, VoidEvent
+from apps.sales.profitability import (
+    apply_sale_profitability,
+    build_sale_profitability_preview,
+    current_operating_cost_rate_snapshot,
+    revert_sale_profitability,
+)
+from apps.sales.serializers import (
+    CardCommissionPlanSerializer,
+    OperatingCostRateSerializer,
+    SaleListSerializer,
+    SaleProfitabilityPreviewSerializer,
+    SaleSerializer,
+    VOID_WINDOW_MINUTES,
+)
 
 
 class CardCommissionPlanListView(generics.ListAPIView):
@@ -29,10 +39,45 @@ class CardCommissionPlanListView(generics.ListAPIView):
         return CardCommissionPlan.objects.filter(is_active=True).order_by("sort_order", "installments_months", "label")
 
 
+class SaleProfitabilityPreviewView(generics.GenericAPIView):
+    serializer_class = SaleProfitabilityPreviewSerializer
+    permission_classes = [RolePermission]
+    capability_map = {"post": ["sales.create"]}
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        preview = build_sale_profitability_preview(
+            lines=serializer.validated_data["lines"],
+            payments=serializer.validated_data["payments"],
+        )
+        return Response(preview, status=200)
+
+
+class OperatingCostRateView(generics.GenericAPIView):
+    serializer_class = OperatingCostRateSerializer
+    permission_classes = [RolePermission]
+    capability_map = {"get": ["sales.create"]}
+
+    def get(self, request, *args, **kwargs):
+        snapshot = current_operating_cost_rate_snapshot()
+        payload = {
+            "operating_cost_rate": snapshot.operating_cost_rate,
+            "rate_source": snapshot.rate_source,
+            "calculated_at": snapshot.calculated_at,
+        }
+        return Response(self.get_serializer(payload).data, status=200)
+
+
 class SaleViewSet(viewsets.ModelViewSet):
     queryset = (
         Sale.objects.select_related("cashier", "void_event", "customer")
-        .prefetch_related("lines", "payments__card_commission_plan")
+        .prefetch_related(
+            "lines",
+            "payments__card_commission_plan",
+            "profitability_snapshot__lines__investor",
+            "profitability_snapshot__lines__product",
+        )
         .order_by("-created_at")
     )
     serializer_class = SaleSerializer
@@ -72,7 +117,7 @@ class SaleViewSet(viewsets.ModelViewSet):
                         note="Sale confirmation",
                         created_by=request.user,
                     )
-                    self._apply_investor_ledger_for_line(sale, line)
+                apply_sale_profitability(sale=sale)
 
                 sale.status = SaleStatus.CONFIRMED
                 sale.confirmed_at = timezone.now()
@@ -136,7 +181,7 @@ class SaleViewSet(viewsets.ModelViewSet):
                     note="Sale void",
                     created_by=request.user,
                 )
-                self._revert_investor_ledger_for_line(sale, line)
+            revert_sale_profitability(sale=sale)
 
             self._mark_layaway_refunded_if_linked(sale, request.user)
 
@@ -155,121 +200,10 @@ class SaleViewSet(viewsets.ModelViewSet):
 
         return Response(self.get_serializer(sale).data, status=200)
 
-    def _apply_investor_ledger_for_line(self, sale, line):
-        remaining_qty = line.qty
-        assignments = InvestorAssignment.objects.filter(
-            product=line.product, qty_assigned__gt=0
-        ).order_by("created_at")
-
-        gross_line_revenue = line.qty * line.unit_price
-        line_discount = gross_line_revenue * line.discount_pct / Decimal("100")
-        net_revenue = gross_line_revenue - line_discount
-
-        commission_total = self._sale_commission_total(sale)
-
-        for assignment in assignments:
-            available = assignment.qty_assigned - assignment.qty_sold
-            if available <= 0 or remaining_qty <= 0:
-                continue
-
-            consumed = min(available, remaining_qty)
-            assignment.qty_sold += consumed
-            assignment.save(update_fields=["qty_sold"])
-            remaining_qty -= consumed
-
-            proportional_revenue = net_revenue * (consumed / line.qty)
-            proportional_cost = assignment.unit_cost * consumed
-            proportional_commission = commission_total * (consumed / line.qty)
-
-            net_profit = proportional_revenue - proportional_cost - proportional_commission
-            investor_profit_share = net_profit / Decimal("2")
-
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.INVENTORY_TO_CAPITAL,
-                capital_delta=proportional_cost,
-                inventory_delta=-proportional_cost,
-                profit_delta=Decimal("0"),
-                reference_type="sale",
-                reference_id=str(sale.id),
-                note="Capital recovery",
-            )
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.PROFIT_SHARE,
-                capital_delta=Decimal("0"),
-                inventory_delta=Decimal("0"),
-                profit_delta=investor_profit_share,
-                reference_type="sale",
-                reference_id=str(sale.id),
-                note="Profit share 50/50",
-            )
-
-    def _revert_investor_ledger_for_line(self, sale, line):
-        remaining_qty = line.qty
-        assignments = InvestorAssignment.objects.filter(
-            product=line.product,
-            qty_sold__gt=0,
-        ).order_by("-created_at")
-
-        gross_line_revenue = line.qty * line.unit_price
-        line_discount = gross_line_revenue * line.discount_pct / Decimal("100")
-        net_revenue = gross_line_revenue - line_discount
-        commission_total = self._sale_commission_total(sale)
-
-        for assignment in assignments:
-            if remaining_qty <= 0:
-                break
-
-            reversible_qty = min(assignment.qty_sold, remaining_qty)
-            if reversible_qty <= 0:
-                continue
-
-            proportional_revenue = net_revenue * (reversible_qty / line.qty)
-            proportional_cost = assignment.unit_cost * reversible_qty
-            proportional_commission = commission_total * (reversible_qty / line.qty)
-            net_profit = proportional_revenue - proportional_cost - proportional_commission
-            investor_profit_share = net_profit / Decimal("2")
-
-            assignment.qty_sold -= reversible_qty
-            assignment.save(update_fields=["qty_sold"])
-            remaining_qty -= reversible_qty
-
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.INVENTORY_TO_CAPITAL,
-                capital_delta=-proportional_cost,
-                inventory_delta=proportional_cost,
-                profit_delta=Decimal("0"),
-                reference_type="sale_void",
-                reference_id=str(sale.id),
-                note="Capital recovery reversal (void)",
-            )
-            LedgerEntry.objects.create(
-                investor=assignment.investor,
-                entry_type=LedgerEntryType.PROFIT_SHARE,
-                capital_delta=Decimal("0"),
-                inventory_delta=Decimal("0"),
-                profit_delta=-investor_profit_share,
-                reference_type="sale_void",
-                reference_id=str(sale.id),
-                note="Profit share reversal (void)",
-            )
-
-    @staticmethod
-    def _sale_commission_total(sale):
-        commission_total = Decimal("0")
-        for payment in sale.payments.all():
-            if payment.method != PaymentMethod.CARD:
-                continue
-            commission_rate = payment.commission_rate
-            if commission_rate is None:
-                commission_rate = LEGACY_CARD_TYPE_TO_RATE.get(payment.card_type, Decimal("0"))
-            commission_total += payment.amount * commission_rate
-        return commission_total
-
     @staticmethod
     def _apply_customer_credit_if_needed(sale):
+        from decimal import Decimal
+
         credit_amount = sum(
             (payment.amount for payment in sale.payments.all() if payment.method == PaymentMethod.CUSTOMER_CREDIT),
             Decimal("0.00"),
@@ -287,6 +221,8 @@ class SaleViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _restore_customer_credit_if_needed(sale):
+        from decimal import Decimal
+
         credit_amount = sum(
             (payment.amount for payment in sale.payments.all() if payment.method == PaymentMethod.CUSTOMER_CREDIT),
             Decimal("0.00"),
