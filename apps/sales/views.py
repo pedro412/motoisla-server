@@ -70,16 +70,6 @@ class OperatingCostRateView(generics.GenericAPIView):
 
 
 class SaleViewSet(viewsets.ModelViewSet):
-    queryset = (
-        Sale.objects.select_related("cashier", "void_event", "customer")
-        .prefetch_related(
-            "lines",
-            "payments__card_commission_plan",
-            "profitability_snapshot__lines__investor",
-            "profitability_snapshot__lines__product",
-        )
-        .order_by("-created_at")
-    )
     serializer_class = SaleSerializer
     permission_classes = [RolePermission]
     http_method_names = ["get", "post", "head", "options"]
@@ -90,6 +80,33 @@ class SaleViewSet(viewsets.ModelViewSet):
         "confirm": ["sales.confirm"],
         "void": ["sales.void.own_window"],
     }
+
+    def get_queryset(self):
+        qs = (
+            Sale.objects.select_related("cashier", "void_event", "customer")
+            .prefetch_related(
+                "lines",
+                "payments__card_commission_plan",
+                "profitability_snapshot__lines__investor",
+                "profitability_snapshot__lines__product",
+            )
+            .order_by("-created_at")
+        )
+        params = self.request.query_params
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+        status = params.get("status")
+        cashier = params.get("cashier")
+
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+        if status and status in (SaleStatus.CONFIRMED, SaleStatus.VOID, SaleStatus.DRAFT):
+            qs = qs.filter(status=status)
+        if cashier:
+            qs = qs.filter(cashier__username__icontains=cashier)
+        return qs
 
     def get_serializer_class(self):
         if self.action == "list":
