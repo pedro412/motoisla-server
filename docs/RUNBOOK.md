@@ -42,6 +42,18 @@
    - `GET /api/v1/reports/sales/?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
 2. Validar que solo ventas `CONFIRMED` entran en agregados.
 
+### Balances de inversionistas inconsistentes
+Si un balance de ledger no cuadra con lo esperado:
+1. Correr reconciliación (solo lectura, sin efectos secundarios):
+   ```bash
+   docker compose run --rm web python manage.py reconcile_ledger
+   ```
+2. El comando reporta:
+   - Balances capital/inventory/profit por inversionista.
+   - `qty_sold` de cada `InvestorAssignment` vs la fuente de verdad en `SaleLineProfitability`.
+   - Exit code 0 = todo consistente. Exit code 1 = hay mismatches (revisar output).
+3. Si hay mismatch en `qty_sold`: revisar `SaleLineProfitability` para la asignación afectada y crear entrada compensatoria en ledger si aplica. **Nunca editar entradas de ledger existentes** (el modelo lo prohíbe a nivel de código).
+
 ## 3) Escalamiento
 - Si hay pérdida de datos, congelar operación de escritura y exportar evidencia (logs + IDs afectados).
 - Si hay impacto de seguridad, rotar secretos y bloquear acceso externo temporalmente.

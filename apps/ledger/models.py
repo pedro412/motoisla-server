@@ -1,5 +1,6 @@
 import uuid
 
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -23,6 +24,13 @@ class LedgerEntry(models.Model):
     reference_id = models.CharField(max_length=64)
     note = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValidationError(
+                "LedgerEntry es inmutable. Para corregir, crea una entrada compensatoria."
+            )
+        super().save(*args, **kwargs)
 
     class Meta:
         ordering = ["-created_at"]

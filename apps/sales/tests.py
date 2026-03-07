@@ -1,9 +1,12 @@
 import uuid
 from datetime import timedelta
 from decimal import Decimal
+from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.db.models import Sum
+from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APITestCase
 
@@ -17,7 +20,13 @@ from apps.ledger.models import LedgerEntry
 from apps.ledger.services import current_balances
 from apps.layaway.models import CustomerCredit, Layaway
 from apps.purchases.models import PurchaseReceipt, ReceiptStatus
-from apps.sales.models import CardCommissionPlan, CardType, Payment, PaymentMethod, Sale, SaleLine, SaleStatus, VoidEvent
+from apps.sales.models import CardCommissionPlan, CardType, Payment, PaymentMethod, Sale, SaleLine, SaleLineProfitability, SaleProfitabilitySnapshot, SaleStatus, VoidEvent
+from apps.sales.profitability import (
+    _build_line_chunks,
+    allocate_proportionally,
+    apply_sale_profitability,
+    revert_sale_profitability,
+)
 from apps.suppliers.models import Supplier, SupplierInvoiceParser
 
 User = get_user_model()
@@ -1071,3 +1080,314 @@ class ApiFlowTests(APITestCase):
         self.assertEqual(metrics.status_code, 200)
         self.assertEqual(metrics.data["sales_count"], 0)
         self.assertEqual(Decimal(str(metrics.data["total_sales"])), Decimal("0.00"))
+
+
+class ProfitabilityUnitTests(TestCase):
+    """Unit tests for pure profitability calculation logic — no HTTP, no fixtures needed."""
+
+    # ------------------------------------------------------------------ #
+    # allocate_proportionally                                              #
+    # ------------------------------------------------------------------ #
+
+    def test_allocate_proportionally_equal_weights(self):
+        result = allocate_proportionally(Decimal("100.00"), [Decimal("1"), Decimal("1"), Decimal("1")])
+        self.assertEqual(result[0], Decimal("33.33"))
+        self.assertEqual(result[1], Decimal("33.33"))
+        # Last item absorbs the remainder
+        self.assertEqual(result[2], Decimal("33.34"))
+        self.assertEqual(sum(result), Decimal("100.00"))
+
+    def test_allocate_proportionally_remainder_goes_to_last(self):
+        # 10 / 3 = 3.33 + 3.33 + 3.34
+        result = allocate_proportionally(Decimal("10.00"), [Decimal("1"), Decimal("1"), Decimal("1")])
+        self.assertEqual(sum(result), Decimal("10.00"))
+        self.assertEqual(result[-1], result[0] + Decimal("0.01"))
+
+    def test_allocate_proportionally_zero_total(self):
+        result = allocate_proportionally(Decimal("0.00"), [Decimal("2"), Decimal("3")])
+        self.assertEqual(result, [Decimal("0.00"), Decimal("0.00")])
+
+    def test_allocate_proportionally_single_weight(self):
+        result = allocate_proportionally(Decimal("50.00"), [Decimal("7")])
+        self.assertEqual(result, [Decimal("50.00")])
+
+    # ------------------------------------------------------------------ #
+    # _build_line_chunks                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _make_product_and_line(self, qty=Decimal("3.00"), unit_price=Decimal("100.00"), unit_cost=Decimal("40.00")):
+        from apps.catalog.models import Product
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        admin = User.objects.create_user(username=f"admin_{uuid.uuid4().hex[:8]}", password="x", role="ADMIN")
+        cashier = User.objects.create_user(username=f"cashier_{uuid.uuid4().hex[:8]}", password="x", role="CASHIER")
+
+        product = Product.objects.create(sku=f"SKU-{uuid.uuid4().hex[:6]}", name="Test Product", default_price=unit_price)
+        from apps.inventory.models import InventoryMovement
+        InventoryMovement.objects.create(
+            product=product,
+            movement_type="INBOUND",
+            quantity_delta=Decimal("100"),
+            reference_type="seed",
+            reference_id="seed",
+            note="seed",
+            created_by=admin,
+        )
+
+        sale = Sale.objects.create(total=qty * unit_price, cashier=cashier)
+        line = SaleLine.objects.create(
+            sale=sale,
+            product=product,
+            qty=qty,
+            unit_price=unit_price,
+            unit_cost=unit_cost,
+            discount_pct=Decimal("0.00"),
+        )
+        return product, line, sale
+
+    def test_build_chunks_pure_store(self):
+        """No investor assignments → single STORE chunk with full qty."""
+        product, line, _ = self._make_product_and_line(qty=Decimal("3.00"))
+        chunks, touched = _build_line_chunks(
+            sale_line=line,
+            line_revenue=Decimal("300.00"),
+            line_operating_cost=Decimal("52.50"),
+            line_commission_cost=Decimal("0.00"),
+            lock_assignments=False,
+        )
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].ownership, SaleLineProfitability.Ownership.STORE)
+        self.assertEqual(chunks[0].qty, Decimal("3.00"))
+        self.assertEqual(touched, [])
+
+    def test_build_chunks_pure_investor(self):
+        """Investor assignment covers all qty → single INVESTOR chunk."""
+        from apps.investors.models import Investor
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        inv_user = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor = Investor.objects.create(user=inv_user, display_name="Test Investor")
+        product, line, _ = self._make_product_and_line(qty=Decimal("2.00"), unit_cost=Decimal("40.00"))
+        InvestorAssignment.objects.create(
+            investor=investor, product=product, qty_assigned=Decimal("5.00"), unit_cost=Decimal("40.00")
+        )
+
+        chunks, touched = _build_line_chunks(
+            sale_line=line,
+            line_revenue=Decimal("200.00"),
+            line_operating_cost=Decimal("35.00"),
+            line_commission_cost=Decimal("0.00"),
+            lock_assignments=False,
+        )
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].ownership, SaleLineProfitability.Ownership.INVESTOR)
+        self.assertEqual(chunks[0].qty, Decimal("2.00"))
+        self.assertEqual(len(touched), 1)
+
+    def test_build_chunks_mixed(self):
+        """Investor covers part of qty, store covers remainder → 2 chunks."""
+        from apps.investors.models import Investor
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        inv_user = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor = Investor.objects.create(user=inv_user, display_name="Test Investor Mix")
+        product, line, _ = self._make_product_and_line(qty=Decimal("5.00"), unit_cost=Decimal("40.00"))
+        InvestorAssignment.objects.create(
+            investor=investor, product=product, qty_assigned=Decimal("3.00"), unit_cost=Decimal("40.00")
+        )
+
+        chunks, touched = _build_line_chunks(
+            sale_line=line,
+            line_revenue=Decimal("500.00"),
+            line_operating_cost=Decimal("87.50"),
+            line_commission_cost=Decimal("0.00"),
+            lock_assignments=False,
+        )
+        self.assertEqual(len(chunks), 2)
+        investor_chunk = next(c for c in chunks if c.ownership == SaleLineProfitability.Ownership.INVESTOR)
+        store_chunk = next(c for c in chunks if c.ownership == SaleLineProfitability.Ownership.STORE)
+        self.assertEqual(investor_chunk.qty, Decimal("3.00"))
+        self.assertEqual(store_chunk.qty, Decimal("2.00"))
+        self.assertEqual(investor_chunk.revenue + store_chunk.revenue, Decimal("500.00"))
+
+    def test_build_chunks_multiple_investors_fifo(self):
+        """Two investors with assignments → FIFO order, both chunks present."""
+        from apps.investors.models import Investor
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        inv_user1 = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        inv_user2 = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor1 = Investor.objects.create(user=inv_user1, display_name="Investor FIFO 1")
+        investor2 = Investor.objects.create(user=inv_user2, display_name="Investor FIFO 2")
+
+        product, line, _ = self._make_product_and_line(qty=Decimal("4.00"), unit_cost=Decimal("40.00"))
+        # Create in order to set FIFO by created_at
+        asgn1 = InvestorAssignment.objects.create(
+            investor=investor1, product=product, qty_assigned=Decimal("2.00"), unit_cost=Decimal("40.00")
+        )
+        asgn2 = InvestorAssignment.objects.create(
+            investor=investor2, product=product, qty_assigned=Decimal("3.00"), unit_cost=Decimal("40.00")
+        )
+
+        chunks, touched = _build_line_chunks(
+            sale_line=line,
+            line_revenue=Decimal("400.00"),
+            line_operating_cost=Decimal("70.00"),
+            line_commission_cost=Decimal("0.00"),
+            lock_assignments=False,
+        )
+        # investor1 gets 2, investor2 gets 2 (remaining from their 3)
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0].assignment.id, asgn1.id)
+        self.assertEqual(chunks[0].qty, Decimal("2.00"))
+        self.assertEqual(chunks[1].assignment.id, asgn2.id)
+        self.assertEqual(chunks[1].qty, Decimal("2.00"))
+        self.assertEqual(len(touched), 2)
+
+    def test_profit_split_50_50(self):
+        """Net profit splits exactly 50/50 between investor and store."""
+        net = Decimal("100.00")
+        from apps.sales.profitability import INVESTOR_SHARE_RATE, money
+        investor_share = money(net * INVESTOR_SHARE_RATE)
+        store_share = money(net - investor_share)
+        self.assertEqual(investor_share, Decimal("50.00"))
+        self.assertEqual(store_share, Decimal("50.00"))
+        self.assertEqual(investor_share + store_share, net)
+
+    def test_zero_profit_no_profit_share_ledger_entry(self):
+        """When net profit is zero, no PROFIT_SHARE ledger entry should be created by apply_sale_profitability."""
+        from apps.investors.models import Investor
+        from django.contrib.auth import get_user_model
+        from apps.ledger.models import LedgerEntryType
+
+        User = get_user_model()
+        inv_user = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor = Investor.objects.create(user=inv_user, display_name="Zero Profit Investor")
+        cashier = User.objects.create_user(username=f"cashier_{uuid.uuid4().hex[:8]}", password="x", role="CASHIER")
+
+        from apps.catalog.models import Product
+        from apps.inventory.models import InventoryMovement
+        admin = User.objects.create_user(username=f"admin_{uuid.uuid4().hex[:8]}", password="x", role="ADMIN")
+        product = Product.objects.create(sku=f"SKU-{uuid.uuid4().hex[:6]}", name="Zero Profit Product", default_price=Decimal("40.00"))
+        InventoryMovement.objects.create(
+            product=product, movement_type="INBOUND", quantity_delta=Decimal("10"),
+            reference_type="seed", reference_id="seed", note="seed", created_by=admin,
+        )
+        InvestorAssignment.objects.create(
+            investor=investor, product=product, qty_assigned=Decimal("5.00"), unit_cost=Decimal("40.00")
+        )
+
+        # Sale price == cost → zero gross profit, so net profit will be negative → no PROFIT_SHARE
+        sale = Sale.objects.create(total=Decimal("40.00"), cashier=cashier, status=SaleStatus.CONFIRMED)
+        SaleLine.objects.create(
+            sale=sale, product=product, qty=Decimal("1.00"),
+            unit_price=Decimal("40.00"), unit_cost=Decimal("40.00"), discount_pct=Decimal("0.00"),
+        )
+        Payment.objects.create(sale=sale, method=PaymentMethod.CASH, amount=Decimal("40.00"))
+
+        apply_sale_profitability(sale=sale)
+
+        profit_entries = LedgerEntry.objects.filter(
+            reference_type="sale",
+            reference_id=str(sale.id),
+            entry_type=LedgerEntryType.PROFIT_SHARE,
+        )
+        self.assertEqual(profit_entries.count(), 0)
+
+
+class ProfitabilityChaosTests(TestCase):
+    """Transactional rollback tests — verify no partial state is persisted on failure."""
+
+    def _setup_investor_sale(self):
+        from apps.catalog.models import Product
+        from apps.inventory.models import InventoryMovement
+        from django.contrib.auth import get_user_model
+
+        User = get_user_model()
+        admin = User.objects.create_user(username=f"admin_{uuid.uuid4().hex[:8]}", password="x", role="ADMIN")
+        cashier = User.objects.create_user(username=f"cashier_{uuid.uuid4().hex[:8]}", password="x", role="CASHIER")
+        inv_user = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor = Investor.objects.create(user=inv_user, display_name="Chaos Investor")
+
+        product = Product.objects.create(sku=f"SKU-{uuid.uuid4().hex[:6]}", name="Chaos Product", default_price=Decimal("100.00"))
+        InventoryMovement.objects.create(
+            product=product, movement_type="INBOUND", quantity_delta=Decimal("10"),
+            reference_type="seed", reference_id="seed", note="seed", created_by=admin,
+        )
+        assignment = InvestorAssignment.objects.create(
+            investor=investor, product=product, qty_assigned=Decimal("5.00"), unit_cost=Decimal("40.00")
+        )
+
+        sale = Sale.objects.create(total=Decimal("200.00"), cashier=cashier, status=SaleStatus.CONFIRMED)
+        SaleLine.objects.create(
+            sale=sale, product=product, qty=Decimal("2.00"),
+            unit_price=Decimal("100.00"), unit_cost=Decimal("40.00"), discount_pct=Decimal("0.00"),
+        )
+        Payment.objects.create(sale=sale, method=PaymentMethod.CASH, amount=Decimal("200.00"))
+
+        return sale, assignment
+
+    def test_apply_profitability_rollback_on_ledger_failure(self):
+        """If LedgerEntry creation fails mid-apply, no snapshot or qty_sold change persists."""
+        sale, assignment = self._setup_investor_sale()
+
+        with mock.patch(
+            "apps.sales.profitability.LedgerEntry.objects.create",
+            side_effect=Exception("DB error simulado"),
+        ):
+            with self.assertRaises(Exception):
+                apply_sale_profitability(sale=sale)
+
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("0.00"))
+        self.assertFalse(SaleProfitabilitySnapshot.objects.filter(sale=sale).exists())
+
+    def test_revert_profitability_rollback_on_ledger_failure(self):
+        """If LedgerEntry creation fails mid-revert, qty_sold rollback does not persist."""
+        sale, assignment = self._setup_investor_sale()
+
+        # First apply successfully
+        apply_sale_profitability(sale=sale)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("2.00"))
+
+        with mock.patch(
+            "apps.sales.profitability.LedgerEntry.objects.create",
+            side_effect=Exception("DB error simulado"),
+        ):
+            with self.assertRaises(Exception):
+                revert_sale_profitability(sale=sale)
+
+        # qty_sold must be unchanged (revert rolled back)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.qty_sold, Decimal("2.00"))
+
+    def test_ledger_entry_immutable(self):
+        """Saving an existing LedgerEntry raises ValidationError."""
+        from apps.investors.models import Investor
+        from apps.ledger.models import LedgerEntryType
+        from django.contrib.auth import get_user_model
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        User = get_user_model()
+        inv_user = User.objects.create_user(username=f"inv_{uuid.uuid4().hex[:8]}", password="x", role="INVESTOR")
+        investor = Investor.objects.create(user=inv_user, display_name="Immutable Test")
+
+        entry = LedgerEntry.objects.create(
+            investor=investor,
+            entry_type=LedgerEntryType.CAPITAL_DEPOSIT,
+            capital_delta=Decimal("100.00"),
+            inventory_delta=Decimal("0.00"),
+            profit_delta=Decimal("0.00"),
+            reference_type="test",
+            reference_id="test-1",
+            note="initial",
+        )
+
+        entry.note = "tampered"
+        with self.assertRaises(DjangoValidationError):
+            entry.save()

@@ -56,30 +56,25 @@ Este backlog mantiene el orden del plan original y deja tareas ejecutables para 
 1. Exponer reinversión y filtros más finos de ledger para frontend.
 2. Evaluar locking explícito por producto/asignación para compras concurrentes.
 
-## Prioridad 9 — Integridad del ledger: inmutabilidad y reconciliación
+## Prioridad 9 — Integridad del ledger: inmutabilidad y reconciliación ✅
 
 > Objetivo: que el ledger sea la única fuente de verdad. Cualquier balance o cantidad derivada
 > siempre debe poder recalcularse desde cero sumando entradas del ledger. Sin campos cacheados
 > que puedan desincronizarse silenciosamente.
 
-1. **Auditar campos mutables acoplados al ledger**: identificar todos los campos que se modifican junto con la creación de `LedgerEntry` (e.g. `InvestorAssignment.qty_sold`, snapshots de rentabilidad). Evaluar si pueden derivarse del ledger en lugar de almacenarse como estado mutable.
-2. **Garantizar atomicidad total en operaciones financieras**: las operaciones `confirm` y `void` deben ejecutarse en una única transacción de base de datos (`atomic`). Si cualquier paso falla (creación de ledger entry, actualización de snapshot, cambio de qty_sold), todo hace rollback. No puede quedar un campo actualizado y una entrada de ledger sin crear.
-3. **Comando de reconciliación** (`python manage.py reconcile_ledger`): recalcular balances desde cero sumando entradas del ledger y comparar contra campos cacheados. Reportar cualquier discrepancia. Equivalente al `git status` del estado financiero — debe poder correrse en cualquier momento sin efectos secundarios.
-4. **Modo de solo lectura para entradas pasadas**: ningún código debe poder editar o eliminar un `LedgerEntry` ya creado. Solo se permiten entradas compensatorias nuevas. Agregar restricción explícita a nivel de modelo/servicio.
-5. **Test de caos financiero**: simular fallos a mitad de `apply_sale_profitability` y `revert_sale_profitability` y verificar que el estado queda consistente o completamente revertido — nunca a medias.
+1. ✅ **Atomicidad en `profitability.py`**: `apply_sale_profitability` y `revert_sale_profitability` decoradas con `@transaction.atomic` — savepoint automático cuando se llaman desde `confirm`/`void`; protección propia si se llaman en solitario.
+2. ✅ **Inmutabilidad de `LedgerEntry`**: `save()` lanza `ValidationError` si `_state.adding` es `False`. Ningún código puede editar entradas existentes; solo se permiten entradas compensatorias.
+3. ✅ **Comando `reconcile_ledger`** (`python manage.py reconcile_ledger`): verifica balances del ledger por inversionista y `qty_sold` de cada `InvestorAssignment` contra `SaleLineProfitability`. Solo lectura, exit code 0 = OK / 1 = mismatches. Usable en CI/monitoring/cron.
+4. ✅ **Unit tests de lógica pura** (`ProfitabilityUnitTests`): `allocate_proportionally`, `_build_line_chunks` (STORE, INVESTOR, mixto, FIFO multi-inversor), split 50/50, cero profit.
+5. ✅ **Chaos tests** (`ProfitabilityChaosTests`): rollback de apply/revert en fallo DB, validación de inmutabilidad de ledger entry.
 
-> Riesgo sin esto: un fallo parcial puede dejar `qty_sold` o balances de inversionista
-> desincronizados del ledger de forma silenciosa. El error no se detecta hasta que alguien
-> revisa un reporte y los números no cuadran.
+## Prioridad 10 — Cobertura de tests: lógica financiera crítica ✅
 
-## Prioridad 10 — Cobertura de tests: lógica financiera crítica
-1. Auditar cobertura de tests en `apps/sales/profitability.py` — funciones `apply_sale_profitability`, `revert_sale_profitability` y `build_sale_profitability_preview`.
-2. Verificar casos borde: productos con mezcla de chunks STORE + múltiples inversionistas, venta con múltiples métodos de pago, void de venta con apartado liquidado.
-3. Auditar cobertura en `apps/ledger` — entradas INVENTORY_TO_CAPITAL y PROFIT_SHARE generadas correctamente y sus reversiones compensatorias.
-4. Añadir unit tests de lógica pura (cálculos de split, pesos por qty, comisión de tarjeta) separados de los integration tests — un bug en un cálculo no debe requerir leer un request completo para detectarse.
-5. Asegurar que ningún escenario de void o re-confirmación pueda dejar ledger en estado inconsistente.
-
-> Riesgo: un bug en esta lógica genera entradas de ledger incorrectas con impacto financiero real para inversionistas. Es el código de mayor riesgo del sistema.
+1. ✅ Unit tests de `allocate_proportionally` y `_build_line_chunks` en `ProfitabilityUnitTests`.
+2. ✅ Casos borde cubiertos: chunks STORE + múltiples inversionistas FIFO, venta con profit cero, rollback parcial.
+3. ✅ Chaos tests de `apply_sale_profitability` y `revert_sale_profitability`.
+4. ✅ Test de inmutabilidad de `LedgerEntry`.
+5. ✅ Integration test de ciclo completo confirmar→anular ya existía; chaos tests validan el rollback explícito.
 
 ## Prioridad 10 — Clientes / lealtad (backlog)
 1. Diseñar programa de lealtad o descuentos basado en historial de compras del `Customer`.

@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Iterable
 
+from django.db import transaction
 from django.db.models import Count, Sum
 from django.utils import timezone
 
@@ -290,6 +291,7 @@ def build_sale_profitability_preview(*, lines: list[dict], payments: list[dict])
     }
 
 
+@transaction.atomic
 def apply_sale_profitability(*, sale: Sale) -> SaleProfitabilitySnapshot:
     line_items = list(sale.lines.select_related("product"))
     line_revenues = [_line_revenue(line) for line in line_items]
@@ -400,6 +402,7 @@ def apply_sale_profitability(*, sale: Sale) -> SaleProfitabilitySnapshot:
     return snapshot
 
 
+@transaction.atomic
 def revert_sale_profitability(*, sale: Sale) -> None:
     snapshot = getattr(sale, "profitability_snapshot", None)
     if not snapshot:
